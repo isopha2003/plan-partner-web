@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
-  CheckCircle2, Circle, Clock, Play, Pause, Square,
+  CheckCircle2, Circle, Clock, Play, Square,
   Plus, X, ChevronLeft, ChevronRight, List, Grid3x3,
   BarChart2, Settings, Calendar, Target, Flame,
   Edit3, Check, AlertCircle,
@@ -10,6 +10,7 @@ import {
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, insertBlocksBulk,
   fetchDeadlines, toggleDeadlineRow,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
+  fetchTodaySessions, startTimerSession, endTimerSession,
 } from "../lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -58,6 +59,14 @@ interface ScheduleTemplate {
   id: string;
   name: string;
   blocks: Pick<Block, "title" | "color" | "startH" | "startM" | "endH" | "endM" | "tags" | "memo">[];
+}
+
+interface TimerSession {
+  id: string;
+  date: string;
+  startedAt: string;
+  endedAt: string | null;
+  endReason: "manual" | "auto" | "ongoing";
 }
 
 type Section = "today" | "calendar" | "deadlines" | "grass" | "settings";
@@ -115,9 +124,66 @@ export default function App() {
     })();
   }, []);
 
-  // Global timer — single, app-wide
+  // Global timer — single, app-wide. "자동 일시정지"는 사용자가 누르는 버튼이 아니라
+  // 브라우저 탭 가시성(Page Visibility API)에 의해서만 진입/해제되는 상태.
   const [timerState, setTimerState] = useState<TimerState>("stopped");
   const [timerSec, setTimerSec] = useState(0);
+  const [sessions, setSessions] = useState<TimerSession[]>([]);
+  const currentSessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        let today = await fetchTodaySessions(TODAY_STR);
+        // 지난번에 탭이 그냥 닫혀서 정상 종료 못 한 세션(ongoing)이 있으면 지금 시점으로 마감 처리
+        const stale = today.filter(s => s.endReason === "ongoing");
+        for (const s of stale) {
+          await endTimerSession(s.id, "auto");
+        }
+        if (stale.length) today = await fetchTodaySessions(TODAY_STR);
+        setSessions(today);
+        const totalSec = today.reduce((sum, s) => {
+          if (!s.endedAt) return sum;
+          return sum + Math.max(0, Math.round((new Date(s.endedAt).getTime() - new Date(s.startedAt).getTime()) / 1000));
+        }, 0);
+        setTimerSec(totalSec);
+      } catch (e) { console.error(e); }
+    })();
+  }, []);
+
+  const startSession = async () => {
+    setTimerState("running");
+    try {
+      const session = await startTimerSession(TODAY_STR);
+      currentSessionIdRef.current = session.id;
+      setSessions(s => [...s, session]);
+    } catch (e) { console.error(e); }
+  };
+
+  const endSession = async (reason: "manual" | "auto") => {
+    setTimerState(reason === "manual" ? "stopped" : "auto-paused");
+    const sid = currentSessionIdRef.current;
+    currentSessionIdRef.current = null;
+    if (!sid) return;
+    try {
+      await endTimerSession(sid, reason);
+      setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: reason } : x));
+    } catch (e) { console.error(e); }
+  };
+
+  // 탭 비활성화 → 실행중이었다면 자동 일시정지 / 탭 재활성화 → 자동 일시정지였다면 자동 재시작.
+  // 수동 정지 상태는 이 로직과 무관 — 탭이 어떻게 되든 아무 반응 없음.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden) {
+        if (timerState === "running") endSession("auto");
+      } else {
+        if (timerState === "auto-paused") startSession();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [timerState]);
 
   // Pomodoro / settings
   const [pomodoroOn, setPomodoroOn] = useState(false);
@@ -331,10 +397,9 @@ export default function App() {
           <GlobalTimer
             timerState={timerState}
             timerSec={timerSec}
-            onStart={() => { setTimerSec(0); setTimerState("running"); }}
-            onPause={() => setTimerState("auto-paused")}
-            onStop={() => setTimerState("stopped")}
-            onResume={() => setTimerState("running")}
+            sessions={sessions}
+            onStart={startSession}
+            onManualStop={() => endSession("manual")}
           />
         </div>
 
@@ -452,111 +517,190 @@ export default function App() {
 }
 
 // ── Global Timer Widget ────────────────────────────────────────────
+// 3-state: 실행중 / 자동 일시정지 / 수동 정지. "자동 일시정지"는 버튼으로 들어가는 상태가
+// 아니라 탭 가시성 변화로만 진입·해제됨(App의 visibilitychange 로직 참고) — 그래서 여기엔
+// "일시정지" 버튼이 없고 시작/정지만 있음.
 function GlobalTimer({
-  timerState, timerSec, onStart, onPause, onStop, onResume,
+  timerState, timerSec, sessions, onStart, onManualStop,
 }: {
   timerState: TimerState;
   timerSec: number;
+  sessions: TimerSession[];
   onStart: () => void;
-  onPause: () => void;
-  onStop: () => void;
-  onResume: () => void;
+  onManualStop: () => void;
 }) {
   const isRunning = timerState === "running";
   const isAutoPaused = timerState === "auto-paused";
   const isStopped = timerState === "stopped";
+  const [showHistory, setShowHistory] = useState(false);
 
   return (
-    <div
-      className={`flex items-center gap-3 px-4 py-1.5 rounded-xl border transition-all ${
-        isRunning
-          ? "bg-green-50 border-green-200"
-          : isAutoPaused
-          ? "bg-amber-50 border-amber-200"
-          : "bg-muted/40 border-border"
-      }`}
-    >
-      {/* State indicator */}
-      <div className="flex items-center gap-2">
-        <span
-          className={`size-2 rounded-full flex-shrink-0 ${
-            isRunning ? "bg-green-500 animate-pulse" :
-            isAutoPaused ? "bg-amber-400" :
-            "bg-muted-foreground/40"
-          }`}
-        />
-        <span
-          className={`text-[11px] font-medium w-16 ${
-            isRunning ? "text-green-700" :
-            isAutoPaused ? "text-amber-700" :
+    <div className="relative">
+      <div
+        className={`flex items-center gap-3 px-4 py-1.5 rounded-xl border transition-all ${
+          isRunning
+            ? "bg-green-50 border-green-200"
+            : isAutoPaused
+            ? "bg-amber-50 border-amber-200"
+            : "bg-muted/40 border-border"
+        }`}
+      >
+        {/* State indicator */}
+        <div className="flex items-center gap-2">
+          <span
+            className={`size-2 rounded-full flex-shrink-0 ${
+              isRunning ? "bg-green-500 animate-pulse" :
+              isAutoPaused ? "bg-amber-400" :
+              "bg-muted-foreground/40"
+            }`}
+          />
+          <span
+            className={`text-[11px] font-medium w-16 ${
+              isRunning ? "text-green-700" :
+              isAutoPaused ? "text-amber-700" :
+              "text-muted-foreground"
+            }`}
+          >
+            {isRunning ? "집중 중" : isAutoPaused ? "자동 정지" : "정지됨"}
+          </span>
+        </div>
+
+        {/* Timer display — click to see today's focus/rest session history */}
+        <button
+          onClick={() => setShowHistory(v => !v)}
+          title="오늘의 집중 기록 보기"
+          className={`text-xl font-medium tabular-nums w-20 text-center rounded-md hover:bg-black/5 transition-colors ${
+            isRunning ? "text-green-800" :
+            isAutoPaused ? "text-amber-800" :
             "text-muted-foreground"
           }`}
+          style={{ fontFamily: "'Geist Mono', monospace" }}
         >
-          {isRunning ? "집중 중" : isAutoPaused ? "자동 정지" : "정지됨"}
-        </span>
-      </div>
+          {fmtSec(timerSec)}
+        </button>
 
-      {/* Timer display */}
-      <div
-        className={`text-xl font-medium tabular-nums w-20 text-center ${
-          isRunning ? "text-green-800" :
-          isAutoPaused ? "text-amber-800" :
-          "text-muted-foreground"
-        }`}
-        style={{ fontFamily: "'Geist Mono', monospace" }}
-      >
-        {fmtSec(timerSec)}
-      </div>
-
-      {/* Controls */}
-      <div className="flex items-center gap-1">
-        {isStopped && (
-          <button
-            onClick={onStart}
-            title="타이머 시작"
-            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 transition-colors"
-          >
-            <Play size={11} fill="white" /> 시작
-          </button>
-        )}
-        {isRunning && (
-          <>
+        {/* Controls */}
+        <div className="flex items-center gap-1">
+          {isStopped && (
             <button
-              onClick={onPause}
-              title="일시정지"
-              className="p-1.5 rounded-lg hover:bg-amber-100 text-amber-700 transition-colors"
-            >
-              <Pause size={14} />
-            </button>
-            <button
-              onClick={onStop}
-              title="정지"
-              className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
-            >
-              <Square size={14} fill="currentColor" />
-            </button>
-          </>
-        )}
-        {isAutoPaused && (
-          <>
-            <button
-              onClick={onResume}
-              title="재시작"
+              onClick={onStart}
+              title="타이머 시작"
               className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 transition-colors"
             >
-              <Play size={11} fill="white" /> 재시작
+              <Play size={11} fill="white" /> 시작
             </button>
+          )}
+          {isRunning && (
             <button
-              onClick={onStop}
+              onClick={onManualStop}
               title="정지"
               className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
             >
               <Square size={14} fill="currentColor" />
             </button>
-          </>
+          )}
+          {isAutoPaused && (
+            <>
+              <button
+                onClick={onStart}
+                title="재시작"
+                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 transition-colors"
+              >
+                <Play size={11} fill="white" /> 재시작
+              </button>
+              <button
+                onClick={onManualStop}
+                title="정지"
+                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
+              >
+                <Square size={14} fill="currentColor" />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {showHistory && (
+        <TimerHistoryPopover sessions={sessions} onClose={() => setShowHistory(false)} />
+      )}
+    </div>
+  );
+}
+
+// ── Timer session history popover ───────────────────────────────────
+function TimerHistoryPopover({ sessions, onClose }: { sessions: TimerSession[]; onClose: () => void }) {
+  const sorted = [...sessions].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  const now = Date.now();
+
+  type Segment = { type: "focus" | "rest"; startMs: number; endMs: number | null; endReason?: "manual" | "auto" | "ongoing" };
+  const segments: Segment[] = [];
+  sorted.forEach((s, i) => {
+    const startMs = new Date(s.startedAt).getTime();
+    const endMs = s.endedAt ? new Date(s.endedAt).getTime() : null;
+    if (i > 0) {
+      const prevEndedAt = sorted[i - 1].endedAt;
+      if (prevEndedAt) {
+        segments.push({ type: "rest", startMs: new Date(prevEndedAt).getTime(), endMs: startMs });
+      }
+    }
+    segments.push({ type: "focus", startMs, endMs, endReason: s.endReason });
+  });
+
+  const fmtClock = (ms: number) => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const fmtDur = (ms: number) => {
+    const totalMin = Math.round(ms / 60000);
+    const h = Math.floor(totalMin / 60), m = totalMin % 60;
+    return h > 0 ? `${h}시간 ${m}분` : `${m}분`;
+  };
+
+  const totalFocusMs = segments.filter(s => s.type === "focus").reduce((sum, s) => sum + ((s.endMs ?? now) - s.startMs), 0);
+  const totalRestMs = segments.filter(s => s.type === "rest").reduce((sum, s) => sum + ((s.endMs ?? now) - s.startMs), 0);
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-72 bg-card border border-border rounded-xl shadow-lg z-50 p-3">
+        <div className="flex items-center justify-between gap-3 pb-2 mb-2 border-b border-border">
+          <div>
+            <div className="text-[10px] text-muted-foreground">오늘 총 집중</div>
+            <div className="text-sm font-medium" style={{ fontFamily: "'Geist Mono', monospace" }}>{fmtDur(totalFocusMs)}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] text-muted-foreground">오늘 총 휴식</div>
+            <div className="text-sm font-medium" style={{ fontFamily: "'Geist Mono', monospace" }}>{fmtDur(totalRestMs)}</div>
+          </div>
+        </div>
+        {segments.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground text-center py-3">아직 오늘 기록이 없어요</p>
+        ) : (
+          <div className="space-y-1 max-h-56 overflow-y-auto">
+            {segments.slice().reverse().map((seg, i) => (
+              <div key={i} className="flex items-center gap-2 text-[11px]">
+                {seg.type === "focus" ? (
+                  <span className="size-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                ) : (
+                  <span className="size-1.5 rounded-full bg-muted-foreground/40 flex-shrink-0" />
+                )}
+                <span className="text-muted-foreground" style={{ fontFamily: "'Geist Mono', monospace" }}>
+                  {fmtClock(seg.startMs)}–{seg.endMs ? fmtClock(seg.endMs) : "진행중"}
+                </span>
+                <span className={seg.type === "focus" ? "font-medium" : "text-muted-foreground"}>
+                  {seg.type === "focus" ? "집중" : "휴식"} {fmtDur((seg.endMs ?? now) - seg.startMs)}
+                </span>
+                {seg.type === "focus" && seg.endReason && seg.endReason !== "ongoing" && (
+                  <span title={seg.endReason === "manual" ? "수동 정지" : "자동 정지(탭 이탈)"} className="ml-auto text-[9px] text-muted-foreground/70">
+                    {seg.endReason === "manual" ? "■" : "↺"}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
         )}
       </div>
-    </div>
+    </>
   );
 }
 

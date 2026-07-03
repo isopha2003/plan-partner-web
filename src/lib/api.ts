@@ -181,3 +181,41 @@ export async function deleteScheduleTemplateRow(id: string) {
   const { error } = await supabase.from("schedule_templates").delete().eq("id", id);
   if (error) throw error;
 }
+
+// ── timer_sessions ──────────────────────────────────────────────
+// A "session" is one continuous running stretch. It ends (ended_at set) either because the tab
+// was hidden (end_reason: "auto") or the user hit stop (end_reason: "manual"). The gap between
+// one session's end and the next session's start is a rest period.
+export async function fetchTodaySessions(date: string) {
+  const { data, error } = await supabase
+    .from("timer_sessions")
+    .select("*")
+    .eq("date", date)
+    .order("started_at");
+  if (error) throw error;
+  return (data ?? []).map((s: any) => ({
+    id: s.id,
+    date: s.date,
+    startedAt: s.started_at,
+    endedAt: s.ended_at,
+    endReason: s.end_reason as "manual" | "auto" | "ongoing",
+  }));
+}
+
+export async function startTimerSession(date: string) {
+  const { data, error } = await supabase
+    .from("timer_sessions")
+    .insert({ date, started_at: new Date().toISOString(), end_reason: "ongoing" })
+    .select()
+    .single();
+  if (error) throw error;
+  return { id: data.id, date: data.date, startedAt: data.started_at, endedAt: data.ended_at, endReason: data.end_reason };
+}
+
+export async function endTimerSession(id: string, endReason: "manual" | "auto") {
+  const { error } = await supabase
+    .from("timer_sessions")
+    .update({ ended_at: new Date().toISOString(), end_reason: endReason })
+    .eq("id", id);
+  if (error) throw error;
+}
