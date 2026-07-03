@@ -526,6 +526,7 @@ export default function App() {
             block={selectedBlock}
             childBlocks={blocks.filter(b => b.parentBlockId === selectedBlock.id)}
             templates={templates}
+            sameDayBlocks={blocks.filter(b => b.date === selectedBlock.date && !b.parentBlockId && b.id !== selectedBlock.id)}
             onClose={() => setSelectedBlock(null)}
             onToggle={() => {
               toggleBlock(selectedBlock.id);
@@ -551,6 +552,12 @@ export default function App() {
             onGoToParent={() => {
               const parent = blocks.find(b => b.id === selectedBlock.parentBlockId);
               if (parent) setSelectedBlock(parent);
+            }}
+            onSetNextBlock={(nextBlockId) => {
+              // null은 "연결 해제"라는 의미 있는 값이라 undefined(patchBlock이 "건드리지 않음"으로
+              // 해석)로 뭉개면 안 됨 — 그대로 넘겨야 DB에서도 실제로 지워짐
+              updateBlock(selectedBlock.id, { nextBlockId } as Partial<Block>);
+              setSelectedBlock({ ...selectedBlock, nextBlockId: nextBlockId ?? undefined });
             }}
           />
         )}
@@ -1191,6 +1198,28 @@ function CalendarSection({
                     </div>
                   );
                 })()}
+
+                {/* 습관 스태킹 연결선 — nextBlockId로 연결된 블록끼리, 둘 다 이 날짜 컬럼에
+                    있을 때만 이음. 블록(z-10)이 선 위에 그려지도록 선은 더 낮은 z-index */}
+                {dayBlocks.filter(b => b.nextBlockId).map(b => {
+                  const target = dayBlocks.find(t => t.id === b.nextBlockId);
+                  if (!target) return null;
+                  const y1 = (b.endH * 60 + b.endM) / 60 * HOUR_H;
+                  const y2 = (target.startH * 60 + target.startM) / 60 * HOUR_H;
+                  const top = Math.min(y1, y2);
+                  const height = Math.max(2, Math.abs(y2 - y1));
+                  return (
+                    <div
+                      key={`chain-${b.id}`}
+                      className="absolute pointer-events-none z-[5]"
+                      style={{ left: "50%", top, height, transform: "translateX(-50%)" }}
+                      title={`${b.title} → ${target.title}`}
+                    >
+                      <div className="h-full border-l-2 border-dashed" style={{ borderColor: b.color }} />
+                      <div className="absolute -bottom-[3px] -left-[3px] size-1.5 rotate-45" style={{ backgroundColor: b.color }} />
+                    </div>
+                  );
+                })}
 
                 {/* Blocks */}
                 {dayBlocks.map(block => {
@@ -2083,12 +2112,13 @@ function SettingsSection({
 
 // ── Block Detail Panel — no timer (v2) ─────────────────────────────
 function BlockDetailPanel({
-  block, childBlocks, templates, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave,
-  onSelectChild, onToggleChild, onAddTimeblockChild, onGoToParent,
+  block, childBlocks, templates, sameDayBlocks, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave,
+  onSelectChild, onToggleChild, onAddTimeblockChild, onGoToParent, onSetNextBlock,
 }: {
   block: Block;
   childBlocks: Block[];
   templates: Template[];
+  sameDayBlocks: Block[];
   onClose: () => void;
   onToggle: () => void;
   onDelete: () => void;
@@ -2099,9 +2129,9 @@ function BlockDetailPanel({
   onToggleChild: (id: string) => void;
   onAddTimeblockChild: (child: { templateId: string; title: string; color: string; tags: string[]; startH: number; startM: number; endH: number; endM: number }) => void;
   onGoToParent: () => void;
+  onSetNextBlock: (nextBlockId: string | null) => void;
 }) {
   const [memo, setMemo] = useState(block.memo);
-  const [nextBlock, setNextBlock] = useState("");
 
   // 체크리스트형 자식(무제한 중첩) — block.id 기준으로 불러옴. 위 BlockDetailPanel은
   // key={selectedBlock.id}로 블록이 바뀔 때마다 통째로 리마운트되므로 이 useEffect는
@@ -2305,16 +2335,23 @@ function BlockDetailPanel({
           />
         </div>
 
-        {/* Habit stacking */}
-        <div>
-          <div className="text-[11px] font-medium text-muted-foreground mb-1.5">습관 스태킹</div>
-          <input
-            value={nextBlock}
-            onChange={e => setNextBlock(e.target.value)}
-            placeholder="다음 블록 선택..."
-            className="w-full px-3 py-2 text-xs rounded-lg bg-muted outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
-          />
-        </div>
+        {/* Habit stacking — 같은 날짜의 다른 최상위 블록을 "다음 블록"으로 연결.
+            연결된 블록끼리는 캘린더 그리드 위에 선으로 표시됨(CalendarSection 참고) */}
+        {!block.parentBlockId && (
+          <div>
+            <div className="text-[11px] font-medium text-muted-foreground mb-1.5">습관 스태킹</div>
+            <select
+              value={block.nextBlockId ?? ""}
+              onChange={e => onSetNextBlock(e.target.value || null)}
+              className="w-full px-3 py-2 text-xs rounded-lg bg-muted outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">다음 블록 없음</option>
+              {sameDayBlocks.map(b => (
+                <option key={b.id} value={b.id}>{fmtTime(b.startH, b.startM)} {b.title}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Repeat settings (5.12A) */}
         <div>
