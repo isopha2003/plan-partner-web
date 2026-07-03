@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   CheckCircle2, Circle, Clock, Play, Square,
   Plus, X, ChevronLeft, ChevronRight, List, Grid3x3,
   BarChart2, Settings, Calendar, Target, Flame,
-  Edit3, Check, AlertCircle,
+  Edit3, Check, AlertCircle, PictureInPicture2 as PictureInPicture,
 } from "lucide-react";
 import {
   fetchTemplates, createTemplate, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
@@ -194,6 +195,17 @@ export default function App() {
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [timerState]);
+
+  // 브라우저 탭 타이틀에 실시간 타이머 표시 — 다른 탭을 보고 있어도 탭 목록에서 확인 가능
+  useEffect(() => {
+    if (timerState === "stopped") {
+      document.title = "생활 플래너";
+      return;
+    }
+    const icon = timerState === "running" ? "🟢" : "🟡";
+    document.title = `${icon} ${fmtSec(timerSec)} · 생활 플래너`;
+    return () => { document.title = "생활 플래너"; };
+  }, [timerState, timerSec]);
 
   // Pomodoro / settings
   const [pomodoroOn, setPomodoroOn] = useState(false);
@@ -570,6 +582,48 @@ export default function App() {
 // 3-state: 실행중 / 자동 일시정지 / 수동 정지. "자동 일시정지"는 버튼으로 들어가는 상태가
 // 아니라 탭 가시성 변화로만 진입·해제됨(App의 visibilitychange 로직 참고) — 그래서 여기엔
 // "일시정지" 버튼이 없고 시작/정지만 있음.
+// Document Picture-in-Picture — Chrome/Edge(Chromium)에서만 지원되는 API. 다른 탭/사이트를
+// 보고 있어도 화면 위에 계속 떠 있는 진짜 창을 띄울 수 있음(일반 위젯은 이 탭을 벗어나면
+// 사라짐). 브라우저 보안 정책상 사용자 클릭 없이는 열 수 없어서 버튼으로만 트리거함.
+function usePictureInPictureTimer() {
+  const [pipWindow, setPipWindow] = useState<Window | null>(null);
+  const supported = typeof window !== "undefined" && "documentPictureInPicture" in window;
+
+  const open = async () => {
+    if (!supported) return;
+    try {
+      const win = await (window as any).documentPictureInPicture.requestWindow({ width: 260, height: 120 });
+      // 우리 앱의 스타일시트(Tailwind 포함)를 PiP 창에도 복사해야 클래스가 그대로 적용됨 —
+      // PiP는 별도의 최상위 document라 부모 페이지의 CSS를 상속하지 않음
+      Array.from(document.styleSheets).forEach(sheet => {
+        try {
+          const css = Array.from(sheet.cssRules).map(r => r.cssText).join("\n");
+          const style = win.document.createElement("style");
+          style.textContent = css;
+          win.document.head.appendChild(style);
+        } catch {
+          if (sheet.href) {
+            const link = win.document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = sheet.href;
+            win.document.head.appendChild(link);
+          }
+        }
+      });
+      win.document.body.style.margin = "0";
+      win.document.body.style.background = "transparent";
+      win.addEventListener("pagehide", () => setPipWindow(null), { once: true });
+      setPipWindow(win);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const close = () => { pipWindow?.close(); setPipWindow(null); };
+
+  return { supported, pipWindow, open, close };
+}
+
 function GlobalTimer({
   timerState, timerSec, sessions, onStart, onManualStop,
 }: {
@@ -583,6 +637,7 @@ function GlobalTimer({
   const isAutoPaused = timerState === "auto-paused";
   const isStopped = timerState === "stopped";
   const [showHistory, setShowHistory] = useState(false);
+  const pip = usePictureInPictureTimer();
 
   return (
     <div className="relative">
@@ -667,12 +722,80 @@ function GlobalTimer({
               </button>
             </>
           )}
+
+          {/* 다른 탭/사이트를 봐도 계속 뜨는 PiP 창 — 지원 브라우저(Chrome/Edge)에서만 노출 */}
+          {pip.supported && (
+            <button
+              onClick={() => (pip.pipWindow ? pip.close() : pip.open())}
+              title={pip.pipWindow ? "PiP 닫기" : "다른 탭에서도 보이게 띄우기"}
+              className={`p-1.5 rounded-lg transition-colors ${pip.pipWindow ? "bg-primary/10 text-primary" : "hover:bg-muted text-muted-foreground"}`}
+            >
+              <PictureInPicture size={13} />
+            </button>
+          )}
         </div>
       </div>
 
       {showHistory && (
         <TimerHistoryPopover sessions={sessions} onClose={() => setShowHistory(false)} />
       )}
+
+      {pip.pipWindow && createPortal(
+        <PiPTimerView
+          timerState={timerState}
+          timerSec={timerSec}
+          onStart={onStart}
+          onManualStop={onManualStop}
+        />,
+        pip.pipWindow.document.body
+      )}
+    </div>
+  );
+}
+
+// ── Minimal timer view rendered inside the Document PiP window ────
+function PiPTimerView({
+  timerState, timerSec, onStart, onManualStop,
+}: {
+  timerState: TimerState;
+  timerSec: number;
+  onStart: () => void;
+  onManualStop: () => void;
+}) {
+  const isRunning = timerState === "running";
+  const isAutoPaused = timerState === "auto-paused";
+  return (
+    <div
+      className={`h-screen flex flex-col items-center justify-center gap-2 ${
+        isRunning ? "bg-green-50" : isAutoPaused ? "bg-amber-50" : "bg-muted/40"
+      }`}
+      style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
+    >
+      <div className={`text-3xl font-medium tabular-nums ${isRunning ? "text-green-800" : isAutoPaused ? "text-amber-800" : "text-muted-foreground"}`} style={{ fontFamily: "'Geist Mono', monospace" }}>
+        {fmtSec(timerSec)}
+      </div>
+      <div className="flex gap-2">
+        {timerState === "stopped" && (
+          <button onClick={onStart} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-medium">
+            <Play size={11} fill="white" /> 시작
+          </button>
+        )}
+        {isRunning && (
+          <button onClick={onManualStop} className="p-2 rounded-lg bg-muted text-muted-foreground">
+            <Square size={14} fill="currentColor" />
+          </button>
+        )}
+        {isAutoPaused && (
+          <>
+            <button onClick={onStart} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-medium">
+              <Play size={11} fill="white" /> 재시작
+            </button>
+            <button onClick={onManualStop} className="p-2 rounded-lg bg-muted text-muted-foreground">
+              <Square size={14} fill="currentColor" />
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
