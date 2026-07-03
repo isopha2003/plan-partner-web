@@ -6,9 +6,9 @@ import {
   Edit3, Check, AlertCircle,
 } from "lucide-react";
 import {
-  fetchTemplates, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
+  fetchTemplates, createTemplate, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, insertBlocksBulk,
-  fetchDeadlines, toggleDeadlineRow,
+  fetchDeadlines, createDeadline, toggleDeadlineRow,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
   fetchTodaySessions, startTimerSession, endTimerSession,
   fetchChecklistItems, createChecklistItem, toggleChecklistItemRow, deleteChecklistItemRow,
@@ -358,6 +358,22 @@ export default function App() {
     toggleDeadlineRow(id, completed).catch(console.error);
   };
 
+  const addTemplate = (t: { title: string; color: string; tags: string[] }) => {
+    const tempId = `temp-${Date.now()}`;
+    setTemplates(ts => [...ts, { id: tempId, ...t }]);
+    createTemplate(t)
+      .then(real => setTemplates(ts => ts.map(x => (x.id === tempId ? real : x))))
+      .catch(e => { console.error(e); setTemplates(ts => ts.filter(x => x.id !== tempId)); });
+  };
+
+  const addDeadline = (d: { title: string; dueDate: string }) => {
+    const tempId = `temp-${Date.now()}`;
+    setDeadlines(ds => [...ds, { id: tempId, title: d.title, dueDate: d.dueDate, completed: false }]);
+    createDeadline(d)
+      .then(real => setDeadlines(ds => ds.map(x => (x.id === tempId ? real : x))))
+      .catch(e => { console.error(e); setDeadlines(ds => ds.filter(x => x.id !== tempId)); });
+  };
+
   const todayBlocks = blocks.filter(b => b.date === TODAY_STR && !b.parentBlockId);
   const completedCount = todayBlocks.filter(b => b.completed).length;
   const completionRate = todayBlocks.length > 0 ? Math.round((completedCount / todayBlocks.length) * 100) : 0;
@@ -479,10 +495,11 @@ export default function App() {
               onSaveTemplate={saveScheduleTemplate}
               onApplyTemplate={applyScheduleTemplate}
               onDeleteTemplate={deleteScheduleTemplate}
+              onAddTemplate={addTemplate}
             />
           )}
           {section === "deadlines" && (
-            <DeadlinesSection deadlines={deadlines} onToggle={toggleDeadline} />
+            <DeadlinesSection deadlines={deadlines} onToggle={toggleDeadline} onAddDeadline={addDeadline} />
           )}
           {section === "grass" && (
             <GrassSection
@@ -900,7 +917,7 @@ function TodaySection({
 function CalendarSection({
   blocks, templates, calView, setCalView, calMode, setCalMode,
   templateOpen, setTemplateOpen, onSelect, onToggle, onAddBlock, onUpdateBlock, onUpdateBlockLocal, onDeleteBlock,
-  scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate,
+  scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate, onAddTemplate,
 }: {
   blocks: Block[];
   templates: Template[];
@@ -920,6 +937,7 @@ function CalendarSection({
   onSaveTemplate: (name: string, date: string) => void;
   onApplyTemplate: (templateId: string, targetDate: string) => void;
   onDeleteTemplate: (id: string) => void;
+  onAddTemplate: (t: { title: string; color: string; tags: string[] }) => void;
 }) {
   const HOUR_H = 64;
   const TOTAL_H = 24;
@@ -932,6 +950,10 @@ function CalendarSection({
   const [viewDate, setViewDate] = useState(TODAY_DATE);
   const [saveTplName, setSaveTplName] = useState("");
   const [showSaveTpl, setShowSaveTpl] = useState(false);
+  const [showNewTpl, setShowNewTpl] = useState(false);
+  const [newTplTitle, setNewTplTitle] = useState("");
+  const [newTplColor, setNewTplColor] = useState("#6B9B37");
+  const [newTplTags, setNewTplTags] = useState("");
   const [dragTplId, setDragTplId] = useState<string | null>(null);
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
   const [dragBlockOffsetMin, setDragBlockOffsetMin] = useState(0); // minutes from block top to mouse
@@ -1408,9 +1430,58 @@ function CalendarSection({
                   <span className="truncate text-foreground/80">{t.title}</span>
                 </div>
               ))}
-              <button className="flex items-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent transition-colors">
-                <Plus size={11}/> 새 템플릿
-              </button>
+              {showNewTpl ? (
+                <div className="p-2 rounded-lg bg-sidebar-accent space-y-1.5">
+                  <input
+                    autoFocus
+                    value={newTplTitle}
+                    onChange={e => setNewTplTitle(e.target.value)}
+                    placeholder="제목..."
+                    className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
+                  />
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="color"
+                      value={newTplColor}
+                      onChange={e => setNewTplColor(e.target.value)}
+                      className="size-6 rounded cursor-pointer border border-border flex-shrink-0"
+                    />
+                    <input
+                      value={newTplTags}
+                      onChange={e => setNewTplTags(e.target.value)}
+                      placeholder="태그 (쉼표로 구분)"
+                      className="flex-1 min-w-0 text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => {
+                        if (!newTplTitle.trim()) return;
+                        onAddTemplate({
+                          title: newTplTitle.trim(),
+                          color: newTplColor,
+                          tags: newTplTags.split(",").map(t => t.trim()).filter(Boolean),
+                        });
+                        setNewTplTitle(""); setNewTplTags(""); setShowNewTpl(false);
+                      }}
+                      disabled={!newTplTitle.trim()}
+                      className="flex-1 text-[11px] py-1 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 transition-opacity"
+                    >
+                      추가
+                    </button>
+                    <button onClick={() => setShowNewTpl(false)} className="flex-1 text-[11px] py-1 rounded-lg bg-muted hover:bg-muted/70 transition-colors">
+                      취소
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowNewTpl(true)}
+                  className="flex items-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent transition-colors"
+                >
+                  <Plus size={11}/> 새 템플릿
+                </button>
+              )}
 
               {/* Schedule templates */}
               <div className="mt-3 pt-2 border-t border-sidebar-border">
@@ -1467,11 +1538,21 @@ function CalendarSection({
 }
 
 // ── Deadlines Section ──────────────────────────────────────────────
-function DeadlinesSection({ deadlines, onToggle }: { deadlines: Deadline[]; onToggle: (id: string) => void }) {
+function DeadlinesSection({
+  deadlines, onToggle, onAddDeadline,
+}: {
+  deadlines: Deadline[];
+  onToggle: (id: string) => void;
+  onAddDeadline: (d: { title: string; dueDate: string }) => void;
+}) {
   const active = deadlines.filter(d => !d.completed);
   const overdue = active.filter(d => d.dueDate < TODAY_STR);
   const upcoming = active.filter(d => d.dueDate >= TODAY_STR);
   const completed = deadlines.filter(d => d.completed);
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newDueDate, setNewDueDate] = useState(TODAY_STR);
 
   const daysLeft = (date: string) =>
     Math.ceil((parseLocalDate(date).getTime() - TODAY_DATE.getTime()) / 86400000);
@@ -1526,9 +1607,46 @@ function DeadlinesSection({ deadlines, onToggle }: { deadlines: Deadline[]; onTo
                 </div>
               );
             })}
-            <button className="flex items-center gap-2 mt-2 px-4 py-3 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-xl hover:bg-muted w-full">
-              <Plus size={15} /> 마감 작업 추가
-            </button>
+            {showAdd ? (
+              <div className="p-3 rounded-xl border bg-card space-y-2">
+                <input
+                  autoFocus
+                  value={newTitle}
+                  onChange={e => setNewTitle(e.target.value)}
+                  placeholder="제목..."
+                  className="w-full text-sm px-3 py-2 rounded-lg bg-muted outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
+                />
+                <input
+                  type="date"
+                  value={newDueDate}
+                  onChange={e => setNewDueDate(e.target.value)}
+                  className="w-full text-sm px-3 py-2 rounded-lg bg-muted outline-none focus:ring-2 focus:ring-ring"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      if (!newTitle.trim()) return;
+                      onAddDeadline({ title: newTitle.trim(), dueDate: newDueDate });
+                      setNewTitle(""); setShowAdd(false);
+                    }}
+                    disabled={!newTitle.trim()}
+                    className="flex-1 text-sm py-2 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 transition-opacity"
+                  >
+                    추가
+                  </button>
+                  <button onClick={() => setShowAdd(false)} className="flex-1 text-sm py-2 rounded-lg bg-muted hover:bg-muted/70 transition-colors">
+                    취소
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowAdd(true)}
+                className="flex items-center gap-2 mt-2 px-4 py-3 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-xl hover:bg-muted w-full"
+              >
+                <Plus size={15} /> 마감 작업 추가
+              </button>
+            )}
           </div>
         </div>
 
