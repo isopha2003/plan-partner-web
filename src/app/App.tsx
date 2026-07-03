@@ -5,10 +5,18 @@ import {
   BarChart2, Settings, Calendar, Target, Flame,
   Edit3, Check, AlertCircle,
 } from "lucide-react";
+import {
+  fetchTemplates, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
+  deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, insertBlocksBulk,
+  fetchDeadlines, toggleDeadlineRow,
+  fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
+} from "../lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────
 interface Block {
   id: string;
+  templateId?: string;
+  parentBlockId?: string;
   title: string;
   color: string;
   startH: number;
@@ -21,6 +29,7 @@ interface Block {
   date: string;
   repeat?: BlockRepeat;
   repeatGroupId?: string;
+  nextBlockId?: string;
 }
 
 interface Deadline {
@@ -54,32 +63,7 @@ interface ScheduleTemplate {
 type Section = "today" | "calendar" | "deadlines" | "grass" | "settings";
 type TimerState = "running" | "auto-paused" | "stopped";
 
-const TODAY_STR = "2026-07-02";
-
-// ── Static data ────────────────────────────────────────────────────
-const TODAY_BLOCKS: Block[] = [
-  { id: "b1", title: "운영체제 공부", color: "#6B9B37", startH: 9, startM: 0, endH: 11, endM: 0, completed: true, tags: ["공부"], memo: "7장 페이징, 8장 가상메모리 정리함", date: TODAY_STR },
-  { id: "b2", title: "알고리즘 풀기", color: "#5B7EA8", startH: 11, startM: 30, endH: 13, endM: 0, completed: false, tags: ["공부"], memo: "", date: TODAY_STR },
-  { id: "b3", title: "점심 + 산책", color: "#C89A2E", startH: 13, startM: 0, endH: 14, endM: 0, completed: false, tags: ["루틴"], memo: "", date: TODAY_STR },
-  { id: "b4", title: "React 프로젝트", color: "#7B5EA7", startH: 15, startM: 0, endH: 18, endM: 0, completed: false, tags: ["개발"], memo: "컴포넌트 구조 설계 + 상태관리 구현", date: TODAY_STR },
-  { id: "b5", title: "저녁 운동", color: "#D4622A", startH: 19, startM: 0, endH: 20, endM: 0, completed: false, tags: ["운동"], memo: "", date: TODAY_STR },
-];
-
-const DEADLINES_INIT: Deadline[] = [
-  { id: "d1", title: "OS 과제 제출", dueDate: "2026-07-01", completed: false },
-  { id: "d2", title: "알고리즘 프로젝트 PR", dueDate: "2026-07-05", completed: false },
-  { id: "d3", title: "React 포트폴리오 완성", dueDate: "2026-07-15", completed: false },
-  { id: "d4", title: "CS 스터디 발표 자료", dueDate: "2026-06-28", completed: false },
-];
-
-const TEMPLATES: Template[] = [
-  { id: "t1", title: "운영체제 공부", color: "#6B9B37", tags: ["공부"] },
-  { id: "t2", title: "알고리즘 풀기", color: "#5B7EA8", tags: ["공부"] },
-  { id: "t3", title: "React 개발", color: "#7B5EA7", tags: ["개발"] },
-  { id: "t4", title: "저녁 운동", color: "#D4622A", tags: ["운동"] },
-  { id: "t5", title: "독서", color: "#8B6E4E", tags: ["루틴"] },
-  { id: "t6", title: "글쓰기", color: "#4E8B6E", tags: ["루틴"] },
-];
+const TODAY_STR = new Date().toISOString().slice(0, 10);
 
 // ── Helpers ────────────────────────────────────────────────────────
 const fmt2 = (n: number) => String(n).padStart(2, "0");
@@ -88,13 +72,37 @@ const fmtSec = (s: number) => `${fmt2(Math.floor(s / 60))}:${fmt2(s % 60)}`;
 const durMin = (b: Block) => (b.endH * 60 + b.endM) - (b.startH * 60 + b.startM);
 const DAYS_KO = ["일", "월", "화", "수", "목", "금", "토"];
 const MONTHS_KO = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
+const TODAY_DATE = new Date(TODAY_STR);
+const TODAY_LABEL = `${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`;
 
 // ── App ────────────────────────────────────────────────────────────
 export default function App() {
   const [section, setSection] = useState<Section>("today");
-  const [blocks, setBlocks] = useState<Block[]>(TODAY_BLOCKS);
-  const [deadlines, setDeadlines] = useState<Deadline[]>(DEADLINES_INIT);
+  const [blocks, setBlocks] = useState<Block[]>([]);
+  const [deadlines, setDeadlines] = useState<Deadline[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [scheduleTemplates, setScheduleTemplates] = useState<ScheduleTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedBlock, setSelectedBlock] = useState<Block | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [tpls, blks, dls, sts] = await Promise.all([
+          fetchTemplates(), fetchBlocks(), fetchDeadlines(), fetchScheduleTemplates(),
+        ]);
+        setTemplates(tpls);
+        setBlocks(blks);
+        setDeadlines(dls);
+        setScheduleTemplates(sts);
+      } catch (e: any) {
+        setLoadError(e.message ?? "데이터를 불러오지 못했어요");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   // Global timer — single, app-wide
   const [timerState, setTimerState] = useState<TimerState>("stopped");
@@ -117,27 +125,49 @@ export default function App() {
     return () => clearInterval(id);
   }, [timerState]);
 
-  const toggleBlock = (id: string) =>
-    setBlocks(bs => bs.map(b => b.id === id ? { ...b, completed: !b.completed } : b));
+  const toggleBlock = (id: string) => {
+    const target = blocks.find(b => b.id === id);
+    if (!target) return;
+    const completed = !target.completed;
+    setBlocks(bs => bs.map(b => b.id === id ? { ...b, completed } : b));
+    patchBlock(id, { completed }).catch(console.error);
+  };
 
-  const addBlock = (block: Block) =>
-    setBlocks(bs => [...bs, block]);
+  // Optimistic insert: shows instantly with a temp id, then swapped for the real DB row
+  const addBlock = (block: Block) => {
+    const tempId = `temp-${Date.now()}`;
+    setBlocks(bs => [...bs, { ...block, id: tempId }]);
+    insertBlock(block)
+      .then(real => setBlocks(bs => bs.map(b => (b.id === tempId ? real : b))))
+      .catch(e => { console.error(e); setBlocks(bs => bs.filter(b => b.id !== tempId)); });
+  };
 
-  const updateBlock = (id: string, changes: Partial<Block>) =>
+  // Local-only update — used for high-frequency visual feedback (e.g. resize drag) where
+  // hitting the DB on every mousemove would be wasteful. Persisted separately on drag-end.
+  const updateBlockLocal = (id: string, changes: Partial<Block>) =>
     setBlocks(bs => bs.map(b => b.id === id ? { ...b, ...changes } : b));
+
+  const updateBlock = (id: string, changes: Partial<Block>) => {
+    updateBlockLocal(id, changes);
+    patchBlock(id, changes).catch(console.error);
+  };
 
   const deleteBlock = (id: string) => {
     setBlocks(bs => bs.filter(b => b.id !== id));
     setSelectedBlock(prev => prev?.id === id ? null : prev);
+    deleteBlockRow(id).catch(console.error);
   };
 
   const deleteRepeatGroup = (id: string, fromDate: string) => {
-    setBlocks(bs => {
-      const block = bs.find(b => b.id === id);
-      const groupId = block?.repeatGroupId;
-      if (!groupId) return bs.filter(b => b.id !== id);
-      return bs.filter(b => !(b.repeatGroupId === groupId && b.date >= fromDate));
-    });
+    const block = blocks.find(b => b.id === id);
+    const groupId = block?.repeatGroupId;
+    if (!groupId) {
+      setBlocks(bs => bs.filter(b => b.id !== id));
+      deleteBlockRow(id).catch(console.error);
+    } else {
+      setBlocks(bs => bs.filter(b => !(b.repeatGroupId === groupId && b.date >= fromDate)));
+      apiDeleteRepeatGroup(groupId, fromDate).catch(console.error);
+    }
     setSelectedBlock(null);
   };
 
@@ -179,27 +209,41 @@ export default function App() {
     return instances;
   };
 
-  const setBlockRepeat = (id: string, repeat: BlockRepeat) => {
-    setBlocks(bs => {
-      const block = bs.find(b => b.id === id);
-      if (!block) return bs;
-      const groupId = `rg-${id}`;
-      const updated = { ...block, repeat, repeatGroupId: groupId };
-      const filtered = bs.filter(b => b.repeatGroupId !== groupId || b.id === id);
-      const instances = generateRepeatInstances(updated, repeat);
-      return [...filtered.map(b => b.id === id ? updated : b), ...instances];
-    });
+  const refetchBlocks = async () => {
+    try { setBlocks(await fetchBlocks()); } catch (e) { console.error(e); }
   };
 
-  const [scheduleTemplates, setScheduleTemplates] = useState<ScheduleTemplate[]>([]);
+  const setBlockRepeat = (id: string, repeat: BlockRepeat) => {
+    const block = blocks.find(b => b.id === id);
+    if (!block) return;
+    const groupId = `rg-${id}`;
+    const updated = { ...block, repeat, repeatGroupId: groupId };
+    const instances = generateRepeatInstances(updated, repeat);
+
+    // optimistic: show immediately with temp ids, then reconcile against the DB
+    setBlocks(bs => {
+      const filtered = bs.filter(b => b.repeatGroupId !== groupId || b.id === id);
+      return [...filtered.map(b => (b.id === id ? updated : b)), ...instances];
+    });
+
+    (async () => {
+      try {
+        await patchBlock(id, { repeat, repeatGroupId: groupId });
+        if (instances.length) await insertBlocksBulk(instances);
+        await refetchBlocks();
+      } catch (e) { console.error(e); }
+    })();
+  };
 
   const saveScheduleTemplate = (name: string, date: string) => {
     const dayBlocks = blocks.filter(b => b.date === date);
     if (!dayBlocks.length) return;
-    setScheduleTemplates(ts => [...ts, {
-      id: `st-${Date.now()}`, name,
-      blocks: dayBlocks.map(b => ({ title: b.title, color: b.color, startH: b.startH, startM: b.startM, endH: b.endH, endM: b.endM, tags: b.tags, memo: b.memo })),
-    }]);
+    const blocksSnapshot = dayBlocks.map(b => ({ title: b.title, color: b.color, startH: b.startH, startM: b.startM, endH: b.endH, endM: b.endM, tags: b.tags, memo: b.memo }));
+    const tempId = `temp-${Date.now()}`;
+    setScheduleTemplates(ts => [...ts, { id: tempId, name, blocks: blocksSnapshot }]);
+    createScheduleTemplateRow(name, blocksSnapshot)
+      .then(real => setScheduleTemplates(ts => ts.map(t => (t.id === tempId ? real : t))))
+      .catch(e => { console.error(e); setScheduleTemplates(ts => ts.filter(t => t.id !== tempId)); });
   };
 
   const applyScheduleTemplate = (templateId: string, targetDate: string) => {
@@ -208,19 +252,29 @@ export default function App() {
     const existing = blocks.filter(b => b.date === targetDate);
     const newBlocks = tpl.blocks
       .filter(tb => !existing.some(b => tb.startH * 60 + tb.startM < b.endH * 60 + b.endM && tb.endH * 60 + tb.endM > b.startH * 60 + b.startM))
-      .map((tb, i) => ({ ...tb, id: `b-tpl-${Date.now()}-${i}`, date: targetDate, completed: false }));
+      .map((tb, i) => ({ ...tb, id: `temp-tpl-${Date.now()}-${i}`, date: targetDate, completed: false }));
+    if (!newBlocks.length) return;
     setBlocks(bs => [...bs, ...newBlocks]);
+    insertBlocksBulk(newBlocks).then(() => refetchBlocks()).catch(console.error);
   };
 
-  const deleteScheduleTemplate = (id: string) =>
+  const deleteScheduleTemplate = (id: string) => {
     setScheduleTemplates(ts => ts.filter(t => t.id !== id));
+    deleteScheduleTemplateRow(id).catch(console.error);
+  };
 
-  const toggleDeadline = (id: string) =>
-    setDeadlines(ds => ds.map(d => d.id === id ? { ...d, completed: !d.completed } : d));
+  const toggleDeadline = (id: string) => {
+    const target = deadlines.find(d => d.id === id);
+    if (!target) return;
+    const completed = !target.completed;
+    setDeadlines(ds => ds.map(d => d.id === id ? { ...d, completed } : d));
+    toggleDeadlineRow(id, completed).catch(console.error);
+  };
 
-  const completedCount = blocks.filter(b => b.completed).length;
-  const completionRate = Math.round((completedCount / blocks.length) * 100);
-  const totalPlanMin = blocks.reduce((s, b) => s + durMin(b), 0);
+  const todayBlocks = blocks.filter(b => b.date === TODAY_STR);
+  const completedCount = todayBlocks.filter(b => b.completed).length;
+  const completionRate = todayBlocks.length > 0 ? Math.round((completedCount / todayBlocks.length) * 100) : 0;
+  const totalPlanMin = todayBlocks.reduce((s, b) => s + durMin(b), 0);
 
   const navItems: { id: Section; label: string; Icon: React.FC<{ size: number }> }[] = [
     { id: "today", label: "오늘", Icon: Clock },
@@ -229,6 +283,25 @@ export default function App() {
     { id: "grass", label: "활동 기록 & 통계", Icon: BarChart2 },
     { id: "settings", label: "설정", Icon: Settings },
   ];
+
+  if (loading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background text-muted-foreground text-sm">
+        불러오는 중...
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background text-sm">
+        <div className="text-center">
+          <div className="text-destructive font-medium mb-1">데이터를 불러오지 못했어요</div>
+          <div className="text-muted-foreground text-xs">{loadError}</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
@@ -239,7 +312,7 @@ export default function App() {
           <h1 className="text-base font-medium" style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic" }}>
             생활 플래너
           </h1>
-          <span className="text-[11px] text-muted-foreground hidden sm:block">2026년 7월 2일 목요일</span>
+          <span className="text-[11px] text-muted-foreground hidden sm:block">{TODAY_LABEL}</span>
         </div>
 
         {/* Global timer widget — center of header */}
@@ -291,18 +364,19 @@ export default function App() {
         <main className="flex-1 overflow-hidden flex min-w-0">
           {section === "today" && (
             <TodaySection
-              blocks={blocks}
+              blocks={todayBlocks}
               deadlines={deadlines.filter(d => !d.completed)}
               completionRate={completionRate}
               onToggle={toggleBlock}
               onToggleDeadline={toggleDeadline}
               onSelect={setSelectedBlock}
+              onGoToCalendar={() => setSection("calendar")}
             />
           )}
           {section === "calendar" && (
             <CalendarSection
               blocks={blocks}
-              templates={TEMPLATES}
+              templates={templates}
               calView={calView}
               setCalView={setCalView}
               calMode={calMode}
@@ -313,6 +387,7 @@ export default function App() {
               onToggle={toggleBlock}
               onAddBlock={addBlock}
               onUpdateBlock={updateBlock}
+              onUpdateBlockLocal={updateBlockLocal}
               onDeleteBlock={deleteBlock}
               scheduleTemplates={scheduleTemplates}
               onSaveTemplate={saveScheduleTemplate}
@@ -344,6 +419,7 @@ export default function App() {
         {/* Block detail side panel — no timer */}
         {selectedBlock && (
           <BlockDetailPanel
+            key={selectedBlock.id}
             block={selectedBlock}
             onClose={() => setSelectedBlock(null)}
             onToggle={() => {
@@ -353,6 +429,10 @@ export default function App() {
             onDelete={() => deleteBlock(selectedBlock.id)}
             onDeleteRepeatGroup={(fromDate) => deleteRepeatGroup(selectedBlock.id, fromDate)}
             onSetRepeat={(repeat) => setBlockRepeat(selectedBlock.id, repeat)}
+            onMemoSave={(memo) => {
+              updateBlock(selectedBlock.id, { memo });
+              setSelectedBlock({ ...selectedBlock, memo });
+            }}
           />
         )}
       </div>
@@ -490,7 +570,7 @@ function CircleProgress({ value, size, strokeWidth = 5 }: { value: number; size:
 
 // ── Today Section ──────────────────────────────────────────────────
 function TodaySection({
-  blocks, deadlines, completionRate, onToggle, onToggleDeadline, onSelect,
+  blocks, deadlines, completionRate, onToggle, onToggleDeadline, onSelect, onGoToCalendar,
 }: {
   blocks: Block[];
   deadlines: Deadline[];
@@ -498,6 +578,7 @@ function TodaySection({
   onToggle: (id: string) => void;
   onToggleDeadline: (id: string) => void;
   onSelect: (b: Block) => void;
+  onGoToCalendar: () => void;
 }) {
   const sorted = [...blocks].sort((a, b) => a.startH * 60 + a.startM - (b.startH * 60 + b.startM));
   const done = blocks.filter(b => b.completed).length;
@@ -511,7 +592,7 @@ function TodaySection({
         <div className="flex items-start justify-between mb-8">
           <div>
             <h2 className="text-3xl font-medium" style={{ fontFamily: "'Fraunces', serif" }}>오늘의 계획</h2>
-            <p className="text-sm text-muted-foreground mt-1">2026년 7월 2일 목요일</p>
+            <p className="text-sm text-muted-foreground mt-1">{TODAY_LABEL}</p>
           </div>
           <div className="flex items-center gap-3 mt-1">
             <div className="text-right">
@@ -610,11 +691,23 @@ function TodaySection({
           ))}
         </div>
 
-        {done === blocks.length && (
+        {blocks.length === 0 && (
+          <div className="mt-10 text-center py-8">
+            <div className="text-sm font-medium text-muted-foreground">오늘 계획된 활동이 없어요</div>
+            <button
+              onClick={onGoToCalendar}
+              className="mt-3 text-xs px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+            >
+              캘린더로 이동
+            </button>
+          </div>
+        )}
+
+        {blocks.length > 0 && done === blocks.length && (
           <div className="mt-10 text-center py-8">
             <div className="text-3xl mb-3">🎉</div>
             <div className="text-sm font-medium">오늘의 모든 계획을 완료했어요!</div>
-            <div className="text-xs text-muted-foreground mt-1">수고했어요. 잔디가 한 칸 채워졌습니다.</div>
+            <div className="text-xs text-muted-foreground mt-1">수고했어요. 활동 기록에 반영됐어요.</div>
           </div>
         )}
       </div>
@@ -625,7 +718,7 @@ function TodaySection({
 // ── Calendar Section ───────────────────────────────────────────────
 function CalendarSection({
   blocks, templates, calView, setCalView, calMode, setCalMode,
-  templateOpen, setTemplateOpen, onSelect, onToggle, onAddBlock, onUpdateBlock, onDeleteBlock,
+  templateOpen, setTemplateOpen, onSelect, onToggle, onAddBlock, onUpdateBlock, onUpdateBlockLocal, onDeleteBlock,
   scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate,
 }: {
   blocks: Block[];
@@ -640,6 +733,7 @@ function CalendarSection({
   onToggle: (id: string) => void;
   onAddBlock: (block: Block) => void;
   onUpdateBlock: (id: string, changes: Partial<Block>) => void;
+  onUpdateBlockLocal: (id: string, changes: Partial<Block>) => void;
   onDeleteBlock: (id: string) => void;
   scheduleTemplates: ScheduleTemplate[];
   onSaveTemplate: (name: string, date: string) => void;
@@ -672,7 +766,9 @@ function CalendarSection({
     }
   }, [calView, calMode]);
 
-  // Resize mouse tracking
+  // Resize mouse tracking — uses the local-only updater for live visual feedback on every
+  // mousemove (hitting the DB that often would be wasteful); the final value is persisted
+  // once on mouseup.
   useEffect(() => {
     if (!resizing) return;
     const onMove = (e: MouseEvent) => {
@@ -683,18 +779,22 @@ function CalendarSection({
       if (resizing.edge === "bottom") {
         const newEnd = Math.max(resizing.origStartMin + 15, Math.min(TOTAL_H * 60, resizing.origEndMin + deltaMin));
         if (!clash(resizing.origStartMin, newEnd))
-          onUpdateBlock(resizing.blockId, { endH: Math.floor(newEnd / 60), endM: newEnd % 60 });
+          onUpdateBlockLocal(resizing.blockId, { endH: Math.floor(newEnd / 60), endM: newEnd % 60 });
       } else {
         const newStart = Math.min(resizing.origEndMin - 15, Math.max(0, resizing.origStartMin + deltaMin));
         if (!clash(newStart, resizing.origEndMin))
-          onUpdateBlock(resizing.blockId, { startH: Math.floor(newStart / 60), startM: newStart % 60 });
+          onUpdateBlockLocal(resizing.blockId, { startH: Math.floor(newStart / 60), startM: newStart % 60 });
       }
     };
-    const onUp = () => setResizing(null);
+    const onUp = () => {
+      const final = blocksRef.current.find(b => b.id === resizing.blockId);
+      if (final) onUpdateBlock(final.id, { startH: final.startH, startM: final.startM, endH: final.endH, endM: final.endM });
+      setResizing(null);
+    };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
     return () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
-  }, [resizing, onUpdateBlock]);
+  }, [resizing, onUpdateBlock, onUpdateBlockLocal]);
 
   // Navigation helpers
   const goPrev = () => {
@@ -834,7 +934,7 @@ function CalendarSection({
                   const sMin = dropTarget.startH * 60 + dropTarget.startM;
                   const eMin = Math.min(TOTAL_H * 60, sMin + 60);
                   if (!hasOverlapForDate(dateStr, sMin, eMin)) {
-                    onAddBlock({ id: `b-${Date.now()}`, title: tpl.title, color: tpl.color,
+                    onAddBlock({ id: `b-${Date.now()}`, templateId: tpl.id, title: tpl.title, color: tpl.color,
                       startH: dropTarget.startH, startM: dropTarget.startM,
                       endH: Math.floor(eMin / 60), endM: eMin % 60,
                       completed: false, tags: tpl.tags, memo: "", date: dateStr });
@@ -984,7 +1084,7 @@ function CalendarSection({
                       if (!hasOverlapForDate(dateStr, h*60+m, h*60+m+60)) { startH=h; startM=m; h=99; break; }
                     }
                   }
-                  onAddBlock({ id:`b-${Date.now()}`, title:tpl.title, color:tpl.color,
+                  onAddBlock({ id:`b-${Date.now()}`, templateId: tpl.id, title:tpl.title, color:tpl.color,
                     startH, startM, endH:startH+1, endM:startM,
                     completed:false, tags:tpl.tags, memo:"", date:dateStr });
                   setDragTplId(null);
@@ -1662,7 +1762,7 @@ function SettingsSection({
 
 // ── Block Detail Panel — no timer (v2) ─────────────────────────────
 function BlockDetailPanel({
-  block, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat,
+  block, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave,
 }: {
   block: Block;
   onClose: () => void;
@@ -1670,6 +1770,7 @@ function BlockDetailPanel({
   onDelete: () => void;
   onDeleteRepeatGroup: (fromDate: string) => void;
   onSetRepeat: (repeat: BlockRepeat) => void;
+  onMemoSave: (memo: string) => void;
 }) {
   const [memo, setMemo] = useState(block.memo);
   const [children, setChildren] = useState([
@@ -1722,7 +1823,7 @@ function BlockDetailPanel({
           <div className="text-[11px] font-medium text-muted-foreground mb-1.5">계획 시간</div>
           <div className="px-3 py-2.5 rounded-lg bg-muted/40 border border-border">
             <div className="text-[11px] text-muted-foreground" style={{ fontFamily: "'Geist Mono', monospace" }}>
-              2026-07-02 (목)
+              {block.date} ({DAYS_KO[new Date(block.date).getDay()]})
             </div>
             <div className="text-sm font-medium mt-0.5" style={{ fontFamily: "'Geist Mono', monospace" }}>
               {fmtTime(block.startH, block.startM)} – {fmtTime(block.endH, block.endM)}
@@ -1773,6 +1874,7 @@ function BlockDetailPanel({
           <textarea
             value={memo}
             onChange={e => setMemo(e.target.value)}
+            onBlur={() => { if (memo !== block.memo) onMemoSave(memo); }}
             placeholder="자유롭게 메모하세요..."
             className="w-full h-20 px-3 py-2 text-xs bg-muted rounded-lg resize-none outline-none focus:ring-2 focus:ring-ring text-foreground placeholder:text-muted-foreground"
           />
