@@ -219,3 +219,37 @@ export async function endTimerSession(id: string, endReason: "manual" | "auto") 
     .eq("id", id);
   if (error) throw error;
 }
+
+// ── checklist_items (체크리스트형 자식 — 무제한 중첩) ─────────────
+export async function fetchChecklistItems(blockId: string) {
+  const { data, error } = await supabase
+    .from("checklist_items")
+    .select("*")
+    .eq("block_id", blockId)
+    .order("created_at");
+  if (error) throw error;
+  return (data ?? []).map((r: any) => ({
+    id: r.id, blockId: r.block_id, parentItemId: r.parent_item_id ?? undefined,
+    text: r.text, completed: r.completed, sortOrder: r.sort_order,
+  }));
+}
+
+export async function createChecklistItem(blockId: string, text: string, parentItemId?: string) {
+  const { data, error } = await supabase
+    .from("checklist_items")
+    .insert({ block_id: blockId, parent_item_id: parentItemId ?? null, text })
+    .select()
+    .single();
+  if (error) throw error;
+  return { id: data.id, blockId: data.block_id, parentItemId: data.parent_item_id ?? undefined, text: data.text, completed: data.completed, sortOrder: data.sort_order };
+}
+
+export async function toggleChecklistItemRow(id: string, completed: boolean) {
+  const { error } = await supabase.from("checklist_items").update({ completed }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteChecklistItemRow(id: string) {
+  const { error } = await supabase.from("checklist_items").delete().eq("id", id);
+  if (error) throw error;
+}

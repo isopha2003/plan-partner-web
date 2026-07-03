@@ -11,6 +11,7 @@ import {
   fetchDeadlines, toggleDeadlineRow,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
   fetchTodaySessions, startTimerSession, endTimerSession,
+  fetchChecklistItems, createChecklistItem, toggleChecklistItemRow, deleteChecklistItemRow,
 } from "../lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -67,6 +68,15 @@ interface TimerSession {
   startedAt: string;
   endedAt: string | null;
   endReason: "manual" | "auto" | "ongoing";
+}
+
+interface ChecklistItemT {
+  id: string;
+  blockId: string;
+  parentItemId?: string;
+  text: string;
+  completed: boolean;
+  sortOrder: number;
 }
 
 type Section = "today" | "calendar" | "deadlines" | "grass" | "settings";
@@ -313,7 +323,7 @@ export default function App() {
   };
 
   const saveScheduleTemplate = (name: string, date: string) => {
-    const dayBlocks = blocks.filter(b => b.date === date);
+    const dayBlocks = blocks.filter(b => b.date === date && !b.parentBlockId);
     if (!dayBlocks.length) return;
     const blocksSnapshot = dayBlocks.map(b => ({ title: b.title, color: b.color, startH: b.startH, startM: b.startM, endH: b.endH, endM: b.endM, tags: b.tags, memo: b.memo }));
     const tempId = `temp-${Date.now()}`;
@@ -326,7 +336,7 @@ export default function App() {
   const applyScheduleTemplate = (templateId: string, targetDate: string) => {
     const tpl = scheduleTemplates.find(t => t.id === templateId);
     if (!tpl) return;
-    const existing = blocks.filter(b => b.date === targetDate);
+    const existing = blocks.filter(b => b.date === targetDate && !b.parentBlockId);
     const newBlocks = tpl.blocks
       .filter(tb => !existing.some(b => tb.startH * 60 + tb.startM < b.endH * 60 + b.endM && tb.endH * 60 + tb.endM > b.startH * 60 + b.startM))
       .map((tb, i) => ({ ...tb, id: `temp-tpl-${Date.now()}-${i}`, date: targetDate, completed: false }));
@@ -348,7 +358,7 @@ export default function App() {
     toggleDeadlineRow(id, completed).catch(console.error);
   };
 
-  const todayBlocks = blocks.filter(b => b.date === TODAY_STR);
+  const todayBlocks = blocks.filter(b => b.date === TODAY_STR && !b.parentBlockId);
   const completedCount = todayBlocks.filter(b => b.completed).length;
   const completionRate = todayBlocks.length > 0 ? Math.round((completedCount / todayBlocks.length) * 100) : 0;
   const totalPlanMin = todayBlocks.reduce((s, b) => s + durMin(b), 0);
@@ -477,7 +487,7 @@ export default function App() {
           {section === "grass" && (
             <GrassSection
               completionRate={completionRate}
-              blocks={blocks}
+              blocks={blocks.filter(b => !b.parentBlockId)}
               timerSec={timerSec}
               totalPlanMin={totalPlanMin}
             />
@@ -497,6 +507,8 @@ export default function App() {
           <BlockDetailPanel
             key={selectedBlock.id}
             block={selectedBlock}
+            childBlocks={blocks.filter(b => b.parentBlockId === selectedBlock.id)}
+            templates={templates}
             onClose={() => setSelectedBlock(null)}
             onToggle={() => {
               toggleBlock(selectedBlock.id);
@@ -508,6 +520,20 @@ export default function App() {
             onMemoSave={(memo) => {
               updateBlock(selectedBlock.id, { memo });
               setSelectedBlock({ ...selectedBlock, memo });
+            }}
+            onSelectChild={setSelectedBlock}
+            onToggleChild={toggleBlock}
+            onAddTimeblockChild={(child) => addBlock({
+              id: `b-${Date.now()}`,
+              parentBlockId: selectedBlock.id,
+              date: selectedBlock.date,
+              completed: false,
+              memo: "",
+              ...child,
+            })}
+            onGoToParent={() => {
+              const parent = blocks.find(b => b.id === selectedBlock.parentBlockId);
+              if (parent) setSelectedBlock(parent);
             }}
           />
         )}
@@ -899,6 +925,10 @@ function CalendarSection({
   const TOTAL_H = 24;
   const gridScrollRef = useRef<HTMLDivElement>(null);
 
+  // 자식 블록(독립 타임블록형)은 부모의 상세 패널 안에서만 다뤄지고, 캘린더 그리드에는
+  // 최상위 블록만 표시됨 — 안 그러면 부모 시간대 안에 자식이 겹쳐 보이거나 통계가 중복 집계됨.
+  const topLevelBlocks = blocks.filter(b => !b.parentBlockId);
+
   const [viewDate, setViewDate] = useState(TODAY_DATE);
   const [saveTplName, setSaveTplName] = useState("");
   const [showSaveTpl, setShowSaveTpl] = useState(false);
@@ -911,8 +941,8 @@ function CalendarSection({
     startY: number; origStartMin: number; origEndMin: number; blockDate: string;
   } | null>(null);
 
-  const blocksRef = useRef(blocks);
-  useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+  const blocksRef = useRef(topLevelBlocks);
+  useEffect(() => { blocksRef.current = topLevelBlocks; }, [topLevelBlocks]);
 
   // The browser fires a synthetic "click" right after mouseup even when that mouseup ends a
   // resize drag (mousedown started on the resize handle, a child of the block). React's state
@@ -1000,11 +1030,11 @@ function CalendarSection({
   })();
 
   const hasOverlapForDate = (dateStr: string, startMin: number, endMin: number, excludeId?: string) =>
-    blocks.filter(b => b.date === dateStr && b.id !== excludeId)
+    topLevelBlocks.filter(b => b.date === dateStr && b.id !== excludeId)
       .some(b => startMin < b.endH * 60 + b.endM && endMin > b.startH * 60 + b.startM);
 
   const dragTemplate = dragTplId ? templates.find(t => t.id === dragTplId) ?? null : null;
-  const dragBlock = dragBlockId ? blocks.find(b => b.id === dragBlockId) ?? null : null;
+  const dragBlock = dragBlockId ? topLevelBlocks.find(b => b.id === dragBlockId) ?? null : null;
 
   // ── Shared time-grid renderer (day + week) ──────────────────────
   const renderTimeGrid = (days: Date[]) => (
@@ -1050,7 +1080,7 @@ function CalendarSection({
           {days.map((day, di) => {
             const dateStr = toDateStr(day);
             const isToday = dateStr === TODAY_STR;
-            const dayBlocks = blocks.filter(b => b.date === dateStr);
+            const dayBlocks = topLevelBlocks.filter(b => b.date === dateStr);
             const isDropTarget = dropTarget?.dayIdx === di;
             const ghostStartMin = isDropTarget && dropTarget ? dropTarget.startH * 60 + dropTarget.startM : null;
             const ghostEndMin = ghostStartMin !== null ? Math.min(TOTAL_H * 60, ghostStartMin + 60) : null;
@@ -1233,7 +1263,7 @@ function CalendarSection({
             const isFuture = dateStr > TODAY_STR;
             const col = i % 7;
             const row = Math.floor(i / 7);
-            const dayBlocks = blocks.filter(b => b.date === dateStr)
+            const dayBlocks = topLevelBlocks.filter(b => b.date === dateStr)
               .sort((a,b) => a.startH*60+a.startM - (b.startH*60+b.startM));
             const MAX = 3;
             const shown = dayBlocks.slice(0, MAX);
@@ -1292,8 +1322,8 @@ function CalendarSection({
   const renderListView = () => {
     const dateStr = toDateStr(viewDate);
     const listBlocks = calView === "day"
-      ? blocks.filter(b => b.date === dateStr)
-      : viewDays.flatMap(d => blocks.filter(b => b.date === toDateStr(d)));
+      ? topLevelBlocks.filter(b => b.date === dateStr)
+      : viewDays.flatMap(d => topLevelBlocks.filter(b => b.date === toDateStr(d)));
     const sorted = [...listBlocks].sort((a,b) => a.startH*60+a.startM - (b.startH*60+b.startM));
 
     return (
@@ -1935,23 +1965,74 @@ function SettingsSection({
 
 // ── Block Detail Panel — no timer (v2) ─────────────────────────────
 function BlockDetailPanel({
-  block, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave,
+  block, childBlocks, templates, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave,
+  onSelectChild, onToggleChild, onAddTimeblockChild, onGoToParent,
 }: {
   block: Block;
+  childBlocks: Block[];
+  templates: Template[];
   onClose: () => void;
   onToggle: () => void;
   onDelete: () => void;
   onDeleteRepeatGroup: (fromDate: string) => void;
   onSetRepeat: (repeat: BlockRepeat) => void;
   onMemoSave: (memo: string) => void;
+  onSelectChild: (b: Block) => void;
+  onToggleChild: (id: string) => void;
+  onAddTimeblockChild: (child: { templateId: string; title: string; color: string; tags: string[]; startH: number; startM: number; endH: number; endM: number }) => void;
+  onGoToParent: () => void;
 }) {
   const [memo, setMemo] = useState(block.memo);
-  const [children, setChildren] = useState([
-    { id: "c1", text: "7장 페이징 정리", done: true },
-    { id: "c2", text: "8장 가상메모리 노트", done: true },
-  ]);
-  const [newChild, setNewChild] = useState("");
   const [nextBlock, setNextBlock] = useState("");
+
+  // 체크리스트형 자식(무제한 중첩) — block.id 기준으로 불러옴. 위 BlockDetailPanel은
+  // key={selectedBlock.id}로 블록이 바뀔 때마다 통째로 리마운트되므로 이 useEffect는
+  // 이 블록의 데이터만 다룸.
+  const [items, setItems] = useState<ChecklistItemT[]>([]);
+  useEffect(() => {
+    fetchChecklistItems(block.id).then(setItems).catch(console.error);
+  }, [block.id]);
+
+  const addChecklistItem = async (text: string, parentItemId?: string) => {
+    try {
+      const created = await createChecklistItem(block.id, text, parentItemId);
+      setItems(is => [...is, created]);
+    } catch (e) { console.error(e); }
+  };
+  const toggleChecklistItem = async (id: string, completed: boolean) => {
+    setItems(is => is.map(i => i.id === id ? { ...i, completed } : i));
+    try { await toggleChecklistItemRow(id, completed); } catch (e) { console.error(e); }
+  };
+  const deleteChecklistItem = async (id: string) => {
+    // DB의 FK가 ON DELETE CASCADE라 하위 항목도 서버에서 같이 지워짐 — 로컬 상태도 같이 정리
+    const toRemove = new Set([id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const it of items) {
+        if (it.parentItemId && toRemove.has(it.parentItemId) && !toRemove.has(it.id)) { toRemove.add(it.id); grew = true; }
+      }
+    }
+    setItems(is => is.filter(i => !toRemove.has(i.id)));
+    try { await deleteChecklistItemRow(id); } catch (e) { console.error(e); }
+  };
+
+  // 독립 타임블록형 자식 추가 폼 — 부모→자식 1단계 제약이라 이 블록 자신이 이미 자식인 경우
+  // (block.parentBlockId 존재) 렌더링 자체를 하지 않음(아래 JSX 참고)
+  const [showAddTimeblock, setShowAddTimeblock] = useState(false);
+  const [childTplId, setChildTplId] = useState("");
+  const [childStart, setChildStart] = useState("09:00");
+  const [childEnd, setChildEnd] = useState("10:00");
+  const submitTimeblockChild = () => {
+    const tpl = templates.find(t => t.id === childTplId);
+    if (!tpl) return;
+    const [sh, sm] = childStart.split(":").map(Number);
+    const [eh, em] = childEnd.split(":").map(Number);
+    if (eh * 60 + em <= sh * 60 + sm) return;
+    onAddTimeblockChild({ templateId: tpl.id, title: tpl.title, color: tpl.color, tags: tpl.tags, startH: sh, startM: sm, endH: eh, endM: em });
+    setShowAddTimeblock(false);
+    setChildTplId("");
+  };
 
   // Repeat settings
   const [repeatType, setRepeatType] = useState<"none" | "daily" | "weekly">(block.repeat?.type ?? "none");
@@ -1973,12 +2054,6 @@ function BlockDetailPanel({
     setTimeout(() => setShowRepeatSaved(false), 2000);
   };
 
-  const addChild = () => {
-    if (!newChild.trim()) return;
-    setChildren(cs => [...cs, { id: String(Date.now()), text: newChild.trim(), done: false }]);
-    setNewChild("");
-  };
-
   return (
     <div className="w-72 flex-shrink-0 border-l border-border bg-card flex flex-col overflow-hidden">
       {/* Header */}
@@ -1989,6 +2064,11 @@ function BlockDetailPanel({
           <X size={13} className="text-muted-foreground" />
         </button>
       </div>
+      {block.parentBlockId && (
+        <button onClick={onGoToParent} className="flex items-center gap-1 px-4 py-1.5 text-[11px] text-muted-foreground hover:text-foreground border-b border-border flex-shrink-0">
+          <ChevronLeft size={11} /> 상위 블록으로
+        </button>
+      )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-5">
         {/* Time info — plan only, no timer */}
@@ -2012,34 +2092,88 @@ function BlockDetailPanel({
           ))}
         </div>
 
-        {/* Child items */}
+        {/* 체크리스트형 자식 — 무제한 중첩 */}
         <div>
-          <div className="text-[11px] font-medium text-muted-foreground mb-2">하위 항목</div>
-          <div className="space-y-1.5">
-            {children.map(c => (
-              <div key={c.id} className="flex items-center gap-2 text-xs">
-                <button onClick={() => setChildren(cs => cs.map(x => x.id === c.id ? { ...x, done: !x.done } : x))}>
-                  {c.done
-                    ? <CheckCircle2 size={13} className="text-green-500" />
-                    : <Circle size={13} className="text-muted-foreground" />
-                  }
-                </button>
-                <span className={c.done ? "line-through text-muted-foreground" : ""}>{c.text}</span>
-              </div>
-            ))}
-            <form onSubmit={e => { e.preventDefault(); addChild(); }} className="flex items-center gap-1.5 mt-1">
-              <input
-                value={newChild}
-                onChange={e => setNewChild(e.target.value)}
-                placeholder="항목 추가..."
-                className="flex-1 text-xs px-2 py-1 rounded bg-muted outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
+          <div className="text-[11px] font-medium text-muted-foreground mb-2">체크리스트</div>
+          <div className="space-y-0.5">
+            {items.filter(i => !i.parentItemId).map(item => (
+              <ChecklistNode
+                key={item.id}
+                item={item}
+                items={items}
+                depth={0}
+                onToggle={toggleChecklistItem}
+                onDelete={deleteChecklistItem}
+                onAddChild={addChecklistItem}
               />
-              {newChild && (
-                <button type="submit" className="text-[11px] text-green-600 hover:text-green-700 px-1.5">추가</button>
-              )}
-            </form>
+            ))}
+            <NewChecklistItemForm onAdd={text => addChecklistItem(text)} />
           </div>
         </div>
+
+        {/* 독립 타임블록형 자식 — 1단계까지만 허용되므로 이 블록 자신이 이미 자식이면 숨김 */}
+        {!block.parentBlockId && (
+          <div>
+            <div className="text-[11px] font-medium text-muted-foreground mb-2">하위 타임블록</div>
+            <div className="space-y-1.5">
+              {childBlocks.map(cb => (
+                <div
+                  key={cb.id}
+                  onClick={() => onSelectChild(cb)}
+                  className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/60 rounded-lg px-1.5 py-1 transition-colors"
+                >
+                  <button onClick={e => { e.stopPropagation(); onToggleChild(cb.id); }}>
+                    {cb.completed
+                      ? <CheckCircle2 size={13} style={{ color: cb.color }} />
+                      : <Circle size={13} className="text-muted-foreground" />
+                    }
+                  </button>
+                  <span className="w-0.5 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: cb.color }} />
+                  <span className={`flex-1 truncate ${cb.completed ? "line-through text-muted-foreground" : ""}`}>{cb.title}</span>
+                  <span className="text-muted-foreground flex-shrink-0" style={{ fontFamily: "'Geist Mono', monospace" }}>
+                    {fmtTime(cb.startH, cb.startM)}-{fmtTime(cb.endH, cb.endM)}
+                  </span>
+                </div>
+              ))}
+
+              {showAddTimeblock ? (
+                <div className="p-2 rounded-lg bg-muted/40 space-y-1.5">
+                  <select
+                    value={childTplId}
+                    onChange={e => setChildTplId(e.target.value)}
+                    className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none"
+                  >
+                    <option value="">템플릿 선택...</option>
+                    {templates.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                  </select>
+                  <div className="flex items-center gap-1.5">
+                    <input type="time" value={childStart} onChange={e => setChildStart(e.target.value)}
+                      className="flex-1 text-xs px-2 py-1 rounded bg-card border border-border outline-none" />
+                    <span className="text-muted-foreground text-xs">–</span>
+                    <input type="time" value={childEnd} onChange={e => setChildEnd(e.target.value)}
+                      className="flex-1 text-xs px-2 py-1 rounded bg-card border border-border outline-none" />
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button onClick={submitTimeblockChild} disabled={!childTplId}
+                      className="flex-1 text-[11px] py-1 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 transition-opacity">
+                      추가
+                    </button>
+                    <button onClick={() => setShowAddTimeblock(false)} className="flex-1 text-[11px] py-1 rounded-lg bg-muted hover:bg-muted/70 transition-colors">
+                      취소
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowAddTimeblock(true)}
+                  className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Plus size={11} /> 타임블록 자식 추가
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Memo */}
         <div>
@@ -2180,5 +2314,88 @@ function BlockDetailPanel({
         )}
       </div>
     </div>
+  );
+}
+
+// ── Checklist item — recursive, unlimited nesting ─────────────────
+function ChecklistNode({
+  item, items, depth, onToggle, onDelete, onAddChild,
+}: {
+  item: ChecklistItemT;
+  items: ChecklistItemT[];
+  depth: number;
+  onToggle: (id: string, completed: boolean) => void;
+  onDelete: (id: string) => void;
+  onAddChild: (parentItemId: string, text: string) => void;
+}) {
+  const [showAdd, setShowAdd] = useState(false);
+  const kids = items.filter(i => i.parentItemId === item.id);
+
+  return (
+    <div style={{ marginLeft: depth > 0 ? 14 : 0 }}>
+      <div className="group flex items-center gap-1.5 text-xs py-0.5">
+        <button onClick={() => onToggle(item.id, !item.completed)} className="flex-shrink-0">
+          {item.completed
+            ? <CheckCircle2 size={13} className="text-green-500" />
+            : <Circle size={13} className="text-muted-foreground" />
+          }
+        </button>
+        <span className={`flex-1 min-w-0 truncate ${item.completed ? "line-through text-muted-foreground" : ""}`}>{item.text}</span>
+        <button
+          onClick={() => setShowAdd(v => !v)}
+          title="하위 항목 추가"
+          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity flex-shrink-0"
+        >
+          <Plus size={11} />
+        </button>
+        <button
+          onClick={() => onDelete(item.id)}
+          title="삭제"
+          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity flex-shrink-0"
+        >
+          <X size={11} />
+        </button>
+      </div>
+      {showAdd && (
+        <div style={{ marginLeft: 18 }}>
+          <NewChecklistItemForm
+            autoFocus
+            onAdd={text => { onAddChild(item.id, text); setShowAdd(false); }}
+            onCancel={() => setShowAdd(false)}
+          />
+        </div>
+      )}
+      {kids.map(k => (
+        <ChecklistNode key={k.id} item={k} items={items} depth={depth + 1} onToggle={onToggle} onDelete={onDelete} onAddChild={onAddChild} />
+      ))}
+    </div>
+  );
+}
+
+function NewChecklistItemForm({
+  onAdd, onCancel, autoFocus,
+}: {
+  onAdd: (text: string) => void;
+  onCancel?: () => void;
+  autoFocus?: boolean;
+}) {
+  const [text, setText] = useState("");
+  return (
+    <form
+      onSubmit={e => { e.preventDefault(); if (text.trim()) { onAdd(text.trim()); setText(""); } }}
+      className="flex items-center gap-1.5 mt-1"
+    >
+      <input
+        autoFocus={autoFocus}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => { if (e.key === "Escape") onCancel?.(); }}
+        placeholder="항목 추가..."
+        className="flex-1 text-xs px-2 py-1 rounded bg-muted outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
+      />
+      {text && (
+        <button type="submit" className="text-[11px] text-green-600 hover:text-green-700 px-1.5">추가</button>
+      )}
+    </form>
   );
 }
