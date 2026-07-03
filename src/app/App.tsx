@@ -63,16 +63,27 @@ interface ScheduleTemplate {
 type Section = "today" | "calendar" | "deadlines" | "grass" | "settings";
 type TimerState = "running" | "auto-paused" | "stopped";
 
-const TODAY_STR = new Date().toISOString().slice(0, 10);
-
 // ── Helpers ────────────────────────────────────────────────────────
+// Local calendar date -> "YYYY-MM-DD", WITHOUT going through UTC (unlike .toISOString().slice(0,10),
+// which rolls back to the previous day for any positive UTC offset — e.g. Asia/Seoul UTC+9 turns
+// local midnight July 1st into "2026-06-30". This reads the local Y/M/D components directly.
+const toDateStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+// "YYYY-MM-DD" -> local Date at that day's midnight. `new Date("YYYY-MM-DD")` parses the string
+// as UTC per spec, which is the mirror-image bug of toDateStr above (this direction bites
+// negative-UTC-offset users). Building via the (y, m, d) constructor form is always local.
+const parseLocalDate = (s: string) => {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
+const TODAY_STR = toDateStr(new Date());
+
 const fmt2 = (n: number) => String(n).padStart(2, "0");
 const fmtTime = (h: number, m: number) => `${fmt2(h)}:${fmt2(m)}`;
 const fmtSec = (s: number) => `${fmt2(Math.floor(s / 60))}:${fmt2(s % 60)}`;
 const durMin = (b: Block) => (b.endH * 60 + b.endM) - (b.startH * 60 + b.startM);
 const DAYS_KO = ["일", "월", "화", "수", "목", "금", "토"];
 const MONTHS_KO = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
-const TODAY_DATE = new Date(TODAY_STR);
+const TODAY_DATE = parseLocalDate(TODAY_STR);
 const TODAY_LABEL = `${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`;
 
 // ── App ────────────────────────────────────────────────────────────
@@ -175,11 +186,11 @@ export default function App() {
   const generateRepeatInstances = (block: Block, repeat: BlockRepeat): Block[] => {
     const instances: Block[] = [];
     const groupId = block.repeatGroupId || `rg-${block.id}`;
-    const origin = new Date(block.date);
+    const origin = parseLocalDate(block.date);
     const dur = (block.endH * 60 + block.endM) - (block.startH * 60 + block.startM);
 
     const pushInstance = (d: Date, idx: number) => {
-      const dateStr = d.toISOString().slice(0, 10);
+      const dateStr = toDateStr(d);
       if (repeat.endType === "date" && dateStr > repeat.endDate) return;
       instances.push({
         ...block, id: `b-${Date.now()}-${idx}`,
@@ -615,7 +626,7 @@ function TodaySection({
             </div>
             <div className="space-y-1.5">
               {overdueDeadlines.map(d => {
-                const daysOver = Math.abs(Math.ceil((new Date(d.dueDate).getTime() - new Date(TODAY_STR).getTime()) / 86400000));
+                const daysOver = Math.abs(Math.ceil((parseLocalDate(d.dueDate).getTime() - TODAY_DATE.getTime()) / 86400000));
                 return (
                   <div key={d.id} className="flex items-center gap-2.5">
                     <button onClick={() => onToggleDeadline(d.id)}>
@@ -744,7 +755,7 @@ function CalendarSection({
   const TOTAL_H = 24;
   const gridScrollRef = useRef<HTMLDivElement>(null);
 
-  const [viewDate, setViewDate] = useState(new Date(TODAY_STR));
+  const [viewDate, setViewDate] = useState(TODAY_DATE);
   const [saveTplName, setSaveTplName] = useState("");
   const [showSaveTpl, setShowSaveTpl] = useState(false);
   const [dragTplId, setDragTplId] = useState<string | null>(null);
@@ -758,6 +769,13 @@ function CalendarSection({
 
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+
+  // The browser fires a synthetic "click" right after mouseup even when that mouseup ends a
+  // resize drag (mousedown started on the resize handle, a child of the block). React's state
+  // update from setResizing(null) isn't guaranteed to have committed before that click event
+  // reaches the block's onClick, so checking `resizing` there is a race. A ref is synchronous
+  // and immune to that timing, so use it to suppress the click for one tick after a resize ends.
+  const justResizedRef = useRef(false);
 
   // Scroll to 7am when entering grid view
   useEffect(() => {
@@ -790,6 +808,8 @@ function CalendarSection({
       const final = blocksRef.current.find(b => b.id === resizing.blockId);
       if (final) onUpdateBlock(final.id, { startH: final.startH, startM: final.startM, endH: final.endH, endM: final.endM });
       setResizing(null);
+      justResizedRef.current = true;
+      setTimeout(() => { justResizedRef.current = false; }, 0);
     };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -849,10 +869,15 @@ function CalendarSection({
       <div className="flex border-b border-border flex-shrink-0 bg-card">
         <div className="w-12 flex-shrink-0" />
         {days.map((day, i) => {
-          const isToday = day.toISOString().slice(0,10) === TODAY_STR;
+          const isToday = toDateStr(day) === TODAY_STR;
           const dow = day.getDay();
           return (
-            <div key={i} className="flex-1 text-center py-2 min-w-0">
+            <div
+              key={i}
+              className="flex-1 text-center py-2 min-w-0 cursor-pointer hover:bg-muted/40 transition-colors rounded-lg"
+              onClick={() => { setViewDate(day); setCalView("day"); }}
+              title="이 날짜 일 캘린더로 이동"
+            >
               <div className={`text-[10px] ${days.length > 1 && dow === 0 ? "text-red-400" : days.length > 1 && dow === 6 ? "text-blue-400" : "text-muted-foreground"}`}>
                 {DAYS_KO[dow]}
               </div>
@@ -879,7 +904,7 @@ function CalendarSection({
 
           {/* Day columns */}
           {days.map((day, di) => {
-            const dateStr = day.toISOString().slice(0,10);
+            const dateStr = toDateStr(day);
             const isToday = dateStr === TODAY_STR;
             const dayBlocks = blocks.filter(b => b.date === dateStr);
             const isDropTarget = dropTarget?.dayIdx === di;
@@ -994,7 +1019,7 @@ function CalendarSection({
                       onDragEnd={() => { setDragBlockId(null); setDropTarget(null); }}
                       className={`absolute left-0.5 right-0.5 rounded-lg overflow-hidden z-10 select-none group/block ${resizing?.blockId !== block.id && !isBeingDragged ? "cursor-grab hover:brightness-95" : ""} ${isBeingDragged ? "opacity-30" : ""}`}
                       style={{ top, height, backgroundColor: block.color + "28", borderLeft: `3px solid ${block.color}`, opacity: block.completed ? 0.45 : isBeingDragged ? 0.3 : 1 }}
-                      onClick={() => !resizing && !dragBlockId && onSelect(block)}
+                      onClick={() => !resizing && !dragBlockId && !justResizedRef.current && onSelect(block)}
                     >
                       <div className="absolute top-0 left-0 right-0 h-2.5 cursor-n-resize z-20"
                         onMouseDown={e => { e.stopPropagation(); e.preventDefault();
@@ -1059,7 +1084,7 @@ function CalendarSection({
             if (!day) return (
               <div key={`e-${i}`} className={`min-h-[100px] bg-muted/5 ${i%7!==6?"border-r":""} ${Math.floor(i/7)<totalRows-1?"border-b":""} border-border`} />
             );
-            const dateStr = day.toISOString().slice(0,10);
+            const dateStr = toDateStr(day);
             const isToday = dateStr === TODAY_STR;
             const isFuture = dateStr > TODAY_STR;
             const col = i % 7;
@@ -1091,7 +1116,11 @@ function CalendarSection({
                 }}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs font-medium inline-flex items-center justify-center leading-none ${isToday?"size-5 rounded-full bg-primary text-primary-foreground text-[10px]":col===0?"text-red-400":col===6?"text-blue-400":"text-muted-foreground"}`}>
+                  <span
+                    onClick={e => { e.stopPropagation(); setViewDate(day); setCalView("day"); }}
+                    className={`text-xs font-medium inline-flex items-center justify-center leading-none cursor-pointer hover:opacity-70 transition-opacity ${isToday?"size-5 rounded-full bg-primary text-primary-foreground text-[10px]":col===0?"text-red-400":col===6?"text-blue-400":"text-muted-foreground"}`}
+                    title="이 날짜 일 캘린더로 이동"
+                  >
                     {day.getDate()}
                   </span>
                 </div>
@@ -1117,10 +1146,10 @@ function CalendarSection({
 
   // ── List view ───────────────────────────────────────────────────
   const renderListView = () => {
-    const dateStr = viewDate.toISOString().slice(0,10);
+    const dateStr = toDateStr(viewDate);
     const listBlocks = calView === "day"
       ? blocks.filter(b => b.date === dateStr)
-      : viewDays.flatMap(d => blocks.filter(b => b.date === d.toISOString().slice(0,10)));
+      : viewDays.flatMap(d => blocks.filter(b => b.date === toDateStr(d)));
     const sorted = [...listBlocks].sort((a,b) => a.startH*60+a.startM - (b.startH*60+b.startM));
 
     return (
@@ -1138,7 +1167,7 @@ function CalendarSection({
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium ${block.completed?"line-through text-muted-foreground":""}`}>{block.title}</div>
                 <div className="text-[11px] text-muted-foreground" style={{ fontFamily:"'Geist Mono', monospace" }}>
-                  {block.date !== TODAY_STR && `${new Date(block.date).getMonth()+1}/${new Date(block.date).getDate()} · `}
+                  {block.date !== TODAY_STR && `${parseLocalDate(block.date).getMonth()+1}/${parseLocalDate(block.date).getDate()} · `}
                   {fmtTime(block.startH,block.startM)} – {fmtTime(block.endH,block.endM)}
                 </div>
               </div>
@@ -1219,7 +1248,7 @@ function CalendarSection({
                   <div key={st.id} className="group/st flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-sidebar-accent text-xs">
                     <span className="flex-1 truncate text-foreground/80">{st.name}</span>
                     <button
-                      onClick={() => onApplyTemplate(st.id, viewDate.toISOString().slice(0, 10))}
+                      onClick={() => onApplyTemplate(st.id, toDateStr(viewDate))}
                       className="opacity-0 group-hover/st:opacity-100 text-[9px] px-1.5 py-0.5 rounded bg-primary text-primary-foreground transition-opacity"
                       title="현재 날짜에 적용"
                     >적용</button>
@@ -1232,7 +1261,7 @@ function CalendarSection({
 
                 {/* Save current day */}
                 {showSaveTpl ? (
-                  <form onSubmit={e => { e.preventDefault(); if (saveTplName.trim()) { onSaveTemplate(saveTplName.trim(), viewDays[0]?.toISOString().slice(0,10) || TODAY_STR); setSaveTplName(""); setShowSaveTpl(false); } }}
+                  <form onSubmit={e => { e.preventDefault(); if (saveTplName.trim()) { onSaveTemplate(saveTplName.trim(), (viewDays[0] && toDateStr(viewDays[0])) || TODAY_STR); setSaveTplName(""); setShowSaveTpl(false); } }}
                     className="flex gap-1 px-2 mt-1">
                     <input autoFocus value={saveTplName} onChange={e => setSaveTplName(e.target.value)}
                       placeholder="이름..."
@@ -1271,7 +1300,7 @@ function DeadlinesSection({ deadlines, onToggle }: { deadlines: Deadline[]; onTo
   const completed = deadlines.filter(d => d.completed);
 
   const daysLeft = (date: string) =>
-    Math.ceil((new Date(date).getTime() - new Date(TODAY_STR).getTime()) / 86400000);
+    Math.ceil((parseLocalDate(date).getTime() - TODAY_DATE.getTime()) / 86400000);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -1391,7 +1420,7 @@ function GrassSection({
     ...Array(firstDow).fill(null),
     ...Array.from({ length: daysInMonth }, (_, i) => {
       const d = new Date(viewYear, viewMonth, i + 1);
-      return d.toISOString().slice(0, 10);
+      return toDateStr(d);
     }),
   ];
   while (dayStrings.length % 7 !== 0) dayStrings.push(null);
@@ -1411,7 +1440,7 @@ function GrassSection({
       };
     }
     if (dateStr > TODAY_STR) return { activities: [], focusMin: 0, goalMet: false };
-    const d = new Date(dateStr);
+    const d = parseLocalDate(dateStr);
     const n = d.getDate() + d.getMonth() * 31 + (d.getFullYear() - 2026) * 365;
     const seed = ((n * 17 + 7) % 97 + 97) % 97;
     if (seed < 30) return { activities: [], focusMin: 0, goalMet: false };
@@ -1563,8 +1592,8 @@ function GrassSection({
               const data = getDayData(dateStr);
               const isToday = dateStr === TODAY_STR;
               const isFuture = dateStr > TODAY_STR;
-              const dayNum = new Date(dateStr).getDate();
-              const dow = new Date(dateStr).getDay();
+              const dayNum = parseLocalDate(dateStr).getDate();
+              const dow = parseLocalDate(dateStr).getDay();
               const MAX_SHOWN = 3;
               const shown = data.activities.slice(0, MAX_SHOWN);
               const overflow = data.activities.length - MAX_SHOWN;
@@ -1823,7 +1852,7 @@ function BlockDetailPanel({
           <div className="text-[11px] font-medium text-muted-foreground mb-1.5">계획 시간</div>
           <div className="px-3 py-2.5 rounded-lg bg-muted/40 border border-border">
             <div className="text-[11px] text-muted-foreground" style={{ fontFamily: "'Geist Mono', monospace" }}>
-              {block.date} ({DAYS_KO[new Date(block.date).getDay()]})
+              {block.date} ({DAYS_KO[parseLocalDate(block.date).getDay()]})
             </div>
             <div className="text-sm font-medium mt-0.5" style={{ fontFamily: "'Geist Mono', monospace" }}>
               {fmtTime(block.startH, block.startM)} – {fmtTime(block.endH, block.endM)}
