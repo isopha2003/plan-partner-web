@@ -95,7 +95,10 @@ const parseLocalDate = (s: string) => {
   const [y, m, d] = s.split("-").map(Number);
   return new Date(y, m - 1, d);
 };
-const TODAY_STR = toDateStr(new Date());
+// 자정 롤오버: 아래 세 값은 컴포넌트들이 프op이 아니라 모듈 전역 변수로 직접 참조하고 있어서
+// (예: TodaySection 안에서 `TODAY_STR` 그대로 사용), `let`로 두고 재할당하면 다음 렌더링부터
+// 모든 곳에서 자동으로 새 값을 읽게 됨. 실제로 리렌더를 발생시키는 건 App()의 tick 로직.
+let TODAY_STR = toDateStr(new Date());
 
 const fmt2 = (n: number) => String(n).padStart(2, "0");
 const fmtTime = (h: number, m: number) => `${fmt2(h)}:${fmt2(m)}`;
@@ -103,8 +106,18 @@ const fmtSec = (s: number) => `${fmt2(Math.floor(s / 60))}:${fmt2(s % 60)}`;
 const durMin = (b: Block) => (b.endH * 60 + b.endM) - (b.startH * 60 + b.startM);
 const DAYS_KO = ["일", "월", "화", "수", "목", "금", "토"];
 const MONTHS_KO = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
-const TODAY_DATE = parseLocalDate(TODAY_STR);
-const TODAY_LABEL = `${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`;
+let TODAY_DATE = parseLocalDate(TODAY_STR);
+let TODAY_LABEL = `${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`;
+
+// 실제 날짜가 바뀌었으면 위 세 변수를 갱신하고 true를 반환 (안 바뀌었으면 false)
+function syncTodayIfChanged(): boolean {
+  const real = toDateStr(new Date());
+  if (real === TODAY_STR) return false;
+  TODAY_STR = real;
+  TODAY_DATE = parseLocalDate(TODAY_STR);
+  TODAY_LABEL = `${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`;
+  return true;
+}
 
 // ── App ────────────────────────────────────────────────────────────
 export default function App() {
@@ -194,6 +207,33 @@ export default function App() {
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [timerState]);
+
+  // 자정 롤오버 — 탭을 안 닫고 자정을 넘기면 TODAY_STR이 그대로 어제로 남아있던 버그.
+  // 30초마다 실제 날짜와 비교해서, 바뀌었으면 (1) 실행 중이던 세션을 어제 날짜로 마감하고
+  // 실행 중이었다면 오늘 날짜로 새 세션을 이어서 시작 (2) 오늘의 세션/누적시간을 새로 불러옴
+  // (3) dayTick을 올려서 TODAY_STR을 직접 참조하는 모든 컴포넌트를 리렌더시킴.
+  const [, setDayTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(async () => {
+      if (!syncTodayIfChanged()) return;
+      const wasRunning = timerState === "running";
+      const sid = currentSessionIdRef.current;
+      currentSessionIdRef.current = null;
+      try {
+        if (sid) await endTimerSession(sid, "auto");
+        if (wasRunning) {
+          const session = await startTimerSession(TODAY_STR);
+          currentSessionIdRef.current = session.id;
+          setSessions([session]);
+        } else {
+          setSessions(await fetchTodaySessions(TODAY_STR));
+        }
+        setTimerSec(0);
+      } catch (e) { console.error(e); }
+      setDayTick(t => t + 1);
+    }, 30000);
+    return () => clearInterval(id);
   }, [timerState]);
 
   // 브라우저 탭 타이틀에 실시간 타이머 표시 — 다른 탭을 보고 있어도 탭 목록에서 확인 가능
