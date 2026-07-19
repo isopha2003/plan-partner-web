@@ -220,6 +220,15 @@ export async function endTimerSession(id: string, endReason: "manual" | "auto") 
   if (error) throw error;
 }
 
+// 특정 날짜의 모든 세션을 통째로 삭제 — 오늘 기록 초기화 기능이 호출
+export async function deleteTodaySessions(date: string) {
+  const { error } = await supabase
+    .from("timer_sessions")
+    .delete()
+    .eq("date", date);
+  if (error) throw error;
+}
+
 // ── checklist_items (체크리스트형 자식 — 무제한 중첩) ─────────────
 export async function fetchChecklistItems(blockId: string) {
   const { data, error } = await supabase

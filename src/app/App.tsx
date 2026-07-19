@@ -10,7 +10,7 @@ import {
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, insertBlocksBulk,
   fetchDeadlines, createDeadline, toggleDeadlineRow,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
-  fetchTodaySessions, startTimerSession, endTimerSession,
+  fetchTodaySessions, startTimerSession, endTimerSession, deleteTodaySessions,
   fetchChecklistItems, createChecklistItem, toggleChecklistItemRow, deleteChecklistItemRow,
 } from "../lib/api";
 import { type TimerState, fmtSec } from "../lib/timer";
@@ -110,8 +110,38 @@ const MONTHS_KO = ["1월","2월","3월","4월","5월","6월","7월","8월","9월
 let TODAY_DATE = parseLocalDate(TODAY_STR);
 let TODAY_LABEL = `${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`;
 
-// 뽀모도로 phase 전환 시 OS 네이티브 알림 발송 — 권한 없으면 조용히 무시
+// 두 음(A5→E6) 상승 chime — Web Audio로 코드에서 직접 생성해 파일/OS 사운드 설정에
+// 의존하지 않고 확실히 재생. 사용자 클릭으로 뽀모도로가 시작된 뒤에만 호출되므로
+// autoplay 정책에 걸리지 않음.
+function playChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const play = (freq: number, start: number, dur: number) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = freq;
+      o.connect(g);
+      g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, now + start);
+      g.gain.exponentialRampToValueAtTime(0.35, now + start + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+      o.start(now + start);
+      o.stop(now + start + dur);
+    };
+    play(880, 0, 0.18);      // A5
+    play(1320, 0.14, 0.28);  // E6
+    setTimeout(() => { try { ctx.close(); } catch {} }, 800);
+  } catch (e) { console.error(e); }
+}
+
+// 뽀모도로 phase 전환 시 OS 네이티브 알림 발송 + chime 재생 — 알림 권한 없으면 텍스트는
+// 조용히 스킵하되 사운드는 재생 (사운드는 앱 자체 재생이라 권한 무관).
 async function notifyPomodoro(title: string, body: string) {
+  playChime();
   try {
     const granted = await isPermissionGranted();
     if (!granted) return;
@@ -229,6 +259,20 @@ export default function App() {
     try {
       await endTimerSession(sid, reason);
       setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: reason } : x));
+    } catch (e) { console.error(e); }
+  };
+
+  // 오늘 타이머 기록을 통째로 초기화 — 실행 중이면 먼저 정지시키고, Supabase의 오늘 세션들도
+  // 전부 지움. 사용자가 히스토리 팝오버 안의 "초기화" 버튼을 누를 때만 트리거됨.
+  const resetTodayTimer = async () => {
+    setTimerState("stopped");
+    setPomPhase("focus");
+    setPomPhaseSec(0);
+    currentSessionIdRef.current = null;
+    setSessions([]);
+    setTimerSec(0);
+    try {
+      await deleteTodaySessions(TODAY_STR);
     } catch (e) { console.error(e); }
   };
 
@@ -543,6 +587,7 @@ export default function App() {
             sessions={sessions}
             onStart={startSession}
             onManualStop={() => endSession("manual")}
+            onReset={resetTodayTimer}
             pomodoroOn={pomodoroOn}
             pomPhase={pomPhase}
             pomPhaseRemainSec={Math.max(0, (pomPhase === "focus" ? pomWork : pomBreak) * 60 - pomPhaseSec)}
@@ -691,7 +736,7 @@ export default function App() {
 // 아니라 창 포커스 변화로만 진입·해제됨(App의 onFocusChanged 로직 참고) — 그래서 여기엔
 // "일시정지" 버튼이 없고 시작/정지만 있음.
 function GlobalTimer({
-  timerState, timerSec, sessions, onStart, onManualStop,
+  timerState, timerSec, sessions, onStart, onManualStop, onReset,
   pomodoroOn, pomPhase, pomPhaseRemainSec,
 }: {
   timerState: TimerState;
@@ -699,6 +744,7 @@ function GlobalTimer({
   sessions: TimerSession[];
   onStart: () => void;
   onManualStop: () => void;
+  onReset: () => void;
   pomodoroOn: boolean;
   pomPhase: "focus" | "break";
   pomPhaseRemainSec: number;
@@ -819,16 +865,17 @@ function GlobalTimer({
       </div>
 
       {showHistory && (
-        <TimerHistoryPopover sessions={sessions} onClose={() => setShowHistory(false)} />
+        <TimerHistoryPopover sessions={sessions} onClose={() => setShowHistory(false)} onReset={() => { onReset(); setShowHistory(false); }} />
       )}
     </div>
   );
 }
 
 // ── Timer session history popover ───────────────────────────────────
-function TimerHistoryPopover({ sessions, onClose }: { sessions: TimerSession[]; onClose: () => void }) {
+function TimerHistoryPopover({ sessions, onClose, onReset }: { sessions: TimerSession[]; onClose: () => void; onReset: () => void }) {
   const sorted = [...sessions].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   const now = Date.now();
+  const [confirmReset, setConfirmReset] = useState(false);
 
   type Segment = { type: "focus" | "rest"; startMs: number; endMs: number | null; endReason?: "manual" | "auto" | "ongoing" };
   const segments: Segment[] = [];
@@ -897,6 +944,25 @@ function TimerHistoryPopover({ sessions, onClose }: { sessions: TimerSession[]; 
             ))}
           </div>
         )}
+
+        {/* 오늘 기록 초기화 — 실수 방지를 위해 두 단계 클릭(첫 클릭 → 확인 상태, 다시 클릭 → 실행) */}
+        <div className="pt-2 mt-2 border-t border-border flex items-center justify-end gap-2">
+          {confirmReset ? (
+            <>
+              <span className="text-[10px] text-muted-foreground">정말 초기화할까요?</span>
+              <button onClick={() => setConfirmReset(false)} className="text-[10px] text-muted-foreground hover:text-foreground px-2 py-1 rounded">취소</button>
+              <button onClick={onReset} className="text-[10px] text-destructive font-medium hover:bg-destructive/10 px-2 py-1 rounded">초기화</button>
+            </>
+          ) : (
+            <button
+              onClick={() => setConfirmReset(true)}
+              className="text-[10px] text-muted-foreground hover:text-destructive transition-colors px-2 py-1 rounded"
+              title="오늘 타이머 기록 전부 삭제"
+            >
+              오늘 기록 초기화
+            </button>
+          )}
+        </div>
       </div>
     </>
   );
@@ -2216,12 +2282,12 @@ function SettingsSection({
               <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-border">
                 <div>
                   <label className="block text-[11px] text-muted-foreground mb-1.5">공부 시간 (분)</label>
-                  <input type="number" value={pomWork} onChange={e => setPomWork(Number(e.target.value))}
+                  <input type="number" min={1} value={pomWork} onChange={e => setPomWork(Math.max(1, Number(e.target.value) || 1))}
                     className="w-full px-3 py-2 rounded-lg bg-muted text-sm outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="block text-[11px] text-muted-foreground mb-1.5">쉬는 시간 (분)</label>
-                  <input type="number" value={pomBreak} onChange={e => setPomBreak(Number(e.target.value))}
+                  <input type="number" min={1} value={pomBreak} onChange={e => setPomBreak(Math.max(1, Number(e.target.value) || 1))}
                     className="w-full px-3 py-2 rounded-lg bg-muted text-sm outline-none focus:ring-2 focus:ring-ring" />
                 </div>
               </div>
@@ -2233,39 +2299,26 @@ function SettingsSection({
             <div className="text-[11px] text-muted-foreground mb-4">수동 정지 후 지정 시간이 지나면 브라우저 알림 발송</div>
             <div>
               <label className="block text-[11px] text-muted-foreground mb-1.5">알림 임계 시간 (분)</label>
-              <input type="number" value={abandonMin} onChange={e => setAbandonMin(Number(e.target.value))}
+              <input type="number" min={1} value={abandonMin} onChange={e => setAbandonMin(Math.max(1, Number(e.target.value) || 1))}
                 className="w-40 px-3 py-2 rounded-lg bg-muted text-sm outline-none focus:ring-2 focus:ring-ring" />
             </div>
           </div>
 
           <div className="p-5 rounded-xl border bg-card">
-            <div className="text-sm font-medium mb-2">전역 타이머 동작</div>
-            <div className="text-[11px] text-muted-foreground space-y-1.5">
-              <div className="flex gap-2 items-start">
-                <span className="size-2 mt-1 rounded-full bg-green-500 flex-shrink-0" />
-                <span><strong>실행 중</strong> → 다른 탭으로 전환 시 자동 일시정지</span>
-              </div>
-              <div className="flex gap-2 items-start">
-                <span className="size-2 mt-1 rounded-full bg-amber-400 flex-shrink-0" />
-                <span><strong>자동 일시정지</strong> → 탭으로 돌아오면 자동 재시작</span>
-              </div>
-              <div className="flex gap-2 items-start">
-                <span className="size-2 mt-1 rounded-full bg-muted-foreground/40 flex-shrink-0" />
-                <span><strong>수동 정지</strong> → 탭 전환과 무관, 직접 재시작</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-5 rounded-xl border bg-card">
-            <div className="text-sm font-medium mb-1">브라우저 알림 권한</div>
-            <div className="text-[11px] text-muted-foreground mb-4">뽀모도로·방치 알림을 받으려면 브라우저 알림 권한이 필요해요</div>
+            <div className="text-sm font-medium mb-1">알림 권한</div>
+            <div className="text-[11px] text-muted-foreground mb-4">뽀모도로·방치 알림을 받으려면 시스템 알림 권한이 필요해요. 뽀모도로를 켜면 자동으로 요청되지만, 미리 받아두려면 아래 버튼을 눌러주세요.</div>
             <button
-              onClick={() => typeof Notification !== "undefined" && Notification.requestPermission()}
+              onClick={async () => {
+                try {
+                  const granted = await isPermissionGranted();
+                  if (!granted) await requestPermission();
+                } catch (e) { console.error(e); }
+              }}
               className="px-4 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
             >
               알림 권한 요청
             </button>
-            <p className="text-[11px] text-muted-foreground mt-3">※ 브라우저를 완전히 닫은 상태에서는 알림이 발송되지 않아요</p>
+            <p className="text-[11px] text-muted-foreground mt-3">※ 앱이 완전히 종료된 상태에서는 알림이 발송되지 않아요</p>
           </div>
         </div>
       </div>
