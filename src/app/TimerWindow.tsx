@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Play, Square, X } from "lucide-react";
+import { Play, Pause, X } from "lucide-react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type TimerState, fmtSec } from "../lib/timer";
@@ -31,9 +31,8 @@ export default function TimerWindow() {
     <div
       data-tauri-drag-region
       className={`relative h-screen flex flex-col items-center justify-center gap-2 rounded-xl ${
-        isRunning ? "bg-green-50" : isAutoPaused ? "bg-amber-50" : "bg-muted/40"
+        isRunning ? "bg-muted/40" : isAutoPaused ? "bg-amber-50" : "bg-green-50"
       }`}
-      style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}
     >
       <button
         onClick={closeWindow}
@@ -45,8 +44,7 @@ export default function TimerWindow() {
 
       <div
         data-tauri-drag-region
-        className={`text-3xl font-medium tabular-nums ${isRunning ? "text-green-800" : isAutoPaused ? "text-amber-800" : "text-muted-foreground"}`}
-        style={{ fontFamily: "'Geist Mono', monospace" }}
+        className={`text-3xl font-medium tabular-nums ${isRunning ? "text-muted-foreground" : isAutoPaused ? "text-amber-800" : "text-green-800"}`}
       >
         {fmtSec(timerSec)}
       </div>
@@ -58,7 +56,7 @@ export default function TimerWindow() {
         )}
         {isRunning && (
           <button onClick={stop} className="p-2 rounded-lg bg-muted text-muted-foreground">
-            <Square size={14} fill="currentColor" />
+            <Pause size={14} fill="currentColor" />
           </button>
         )}
         {isAutoPaused && (
@@ -67,7 +65,7 @@ export default function TimerWindow() {
               <Play size={11} fill="white" /> 재시작
             </button>
             <button onClick={stop} className="p-2 rounded-lg bg-muted text-muted-foreground">
-              <Square size={14} fill="currentColor" />
+              <Pause size={14} fill="currentColor" />
             </button>
           </>
         )}

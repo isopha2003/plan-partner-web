@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
-  CheckCircle2, Circle, Clock, Play, Square,
+  CheckCircle2, Circle, Clock, Play, Pause,
   Plus, X, ChevronLeft, ChevronRight, List, Grid3x3,
   BarChart2, Settings, Calendar, Target, Flame,
   Edit3, Check, AlertCircle, PictureInPicture2 as PictureInPicture,
@@ -465,12 +465,12 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+    <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
 
       {/* ── Global Header ── */}
       <header className="flex items-center gap-6 px-5 border-b border-border bg-card flex-shrink-0" style={{ height: 52 }}>
         <div className="flex items-center gap-2.5 flex-shrink-0">
-          <h1 className="text-base font-medium" style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic" }}>
+          <h1 className="text-base font-medium">
             생활 플래너
           </h1>
           <span className="text-[11px] text-muted-foreground hidden sm:block">{TODAY_LABEL}</span>
@@ -683,8 +683,7 @@ function GlobalTimer({
             isAutoPaused ? "text-amber-800" :
             "text-muted-foreground"
           }`}
-          style={{ fontFamily: "'Geist Mono', monospace" }}
-        >
+                 >
           {fmtSec(timerSec)}
         </button>
 
@@ -705,7 +704,7 @@ function GlobalTimer({
               title="정지"
               className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
             >
-              <Square size={14} fill="currentColor" />
+              <Pause size={14} fill="currentColor" />
             </button>
           )}
           {isAutoPaused && (
@@ -722,7 +721,7 @@ function GlobalTimer({
                 title="정지"
                 className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
               >
-                <Square size={14} fill="currentColor" />
+                <Pause size={14} fill="currentColor" />
               </button>
             </>
           )}
@@ -784,11 +783,11 @@ function TimerHistoryPopover({ sessions, onClose }: { sessions: TimerSession[]; 
         <div className="flex items-center justify-between gap-3 pb-2 mb-2 border-b border-border">
           <div>
             <div className="text-[10px] text-muted-foreground">오늘 총 집중</div>
-            <div className="text-sm font-medium" style={{ fontFamily: "'Geist Mono', monospace" }}>{fmtDur(totalFocusMs)}</div>
+            <div className="text-sm font-medium" >{fmtDur(totalFocusMs)}</div>
           </div>
           <div className="text-right">
             <div className="text-[10px] text-muted-foreground">오늘 총 휴식</div>
-            <div className="text-sm font-medium" style={{ fontFamily: "'Geist Mono', monospace" }}>{fmtDur(totalRestMs)}</div>
+            <div className="text-sm font-medium" >{fmtDur(totalRestMs)}</div>
           </div>
         </div>
         {segments.length === 0 ? (
@@ -802,7 +801,7 @@ function TimerHistoryPopover({ sessions, onClose }: { sessions: TimerSession[]; 
                 ) : (
                   <span className="size-1.5 rounded-full bg-muted-foreground/40 flex-shrink-0" />
                 )}
-                <span className="text-muted-foreground" style={{ fontFamily: "'Geist Mono', monospace" }}>
+                <span className="text-muted-foreground" >
                   {fmtClock(seg.startMs)}–{seg.endMs ? fmtClock(seg.endMs) : "진행중"}
                 </span>
                 <span className={seg.type === "focus" ? "font-medium" : "text-muted-foreground"}>
@@ -864,13 +863,13 @@ function TodaySection({
         {/* Header */}
         <div className="flex items-start justify-between mb-8">
           <div>
-            <h2 className="text-3xl font-medium" style={{ fontFamily: "'Fraunces', serif" }}>오늘의 계획</h2>
+            <h2 className="text-3xl font-medium">오늘의 계획</h2>
             <p className="text-sm text-muted-foreground mt-1">{TODAY_LABEL}</p>
           </div>
           <div className="flex items-center gap-3 mt-1">
             <div className="text-right">
               <div className="text-[11px] text-muted-foreground">달성률</div>
-              <div className="text-2xl font-semibold leading-none mt-0.5" style={{ fontFamily: "'Fraunces', serif" }}>
+              <div className="text-2xl font-semibold leading-none mt-0.5">
                 {completionRate}%
               </div>
               <div className="text-[11px] text-muted-foreground mt-0.5">{done}/{blocks.length}</div>
@@ -949,7 +948,7 @@ function TodaySection({
                 <div className={`text-sm font-medium leading-snug ${block.completed ? "line-through text-muted-foreground" : ""}`}>
                   {block.title}
                 </div>
-                <div className="text-[11px] text-muted-foreground mt-0.5" style={{ fontFamily: "'Geist Mono', monospace" }}>
+                <div className="text-[11px] text-muted-foreground mt-0.5" >
                   {fmtTime(block.startH, block.startM)} – {fmtTime(block.endH, block.endM)}
                   <span className="ml-1.5 opacity-60">{durMin(block)}분</span>
                 </div>
@@ -1167,7 +1166,7 @@ function CalendarSection({
           <div className="w-12 flex-shrink-0 relative select-none">
             {Array.from({ length: TOTAL_H }, (_, h) => (
               <div key={h} className="absolute right-2 text-[10px] text-muted-foreground"
-                style={{ top: h * HOUR_H - 7, fontFamily: "'Geist Mono', monospace" }}>
+                style={{ top: h * HOUR_H - 7 }}>
                 {fmt2(h)}
               </div>
             ))}
@@ -1259,7 +1258,7 @@ function CalendarSection({
                         {overlap ? "⚠ 이미 일정이 있어요" : src.title}
                       </div>
                       {!overlap && (
-                        <div className="text-[9px] opacity-60 mt-0.5" style={{ fontFamily: "'Geist Mono', monospace", color: src.color }}>
+                        <div className="text-[9px] opacity-60 mt-0.5" style={{ color: src.color }}>
                           {fmtTime(Math.floor(ghostStartMin/60), ghostStartMin%60)} – {fmtTime(Math.floor(gEnd/60), gEnd%60)}
                         </div>
                       )}
@@ -1323,7 +1322,7 @@ function CalendarSection({
                           {block.title}
                         </div>
                         {height > 32 && (
-                          <div className="text-[9px] opacity-70 mt-0.5" style={{ fontFamily: "'Geist Mono', monospace", color: block.color }}>
+                          <div className="text-[9px] opacity-70 mt-0.5" style={{ color: block.color }}>
                             {fmtTime(block.startH, block.startM)} – {fmtTime(block.endH, block.endM)}
                           </div>
                         )}
@@ -1459,7 +1458,7 @@ function CalendarSection({
               <span className="w-0.5 h-8 rounded-full flex-shrink-0" style={{ backgroundColor: block.color }} />
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium ${block.completed?"line-through text-muted-foreground":""}`}>{block.title}</div>
-                <div className="text-[11px] text-muted-foreground" style={{ fontFamily:"'Geist Mono', monospace" }}>
+                <div className="text-[11px] text-muted-foreground">
                   {block.date !== TODAY_STR && `${parseLocalDate(block.date).getMonth()+1}/${parseLocalDate(block.date).getDate()} · `}
                   {fmtTime(block.startH,block.startM)} – {fmtTime(block.endH,block.endM)}
                 </div>
@@ -1480,7 +1479,7 @@ function CalendarSection({
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0 bg-card/50">
         <div className="flex items-center gap-3">
-          <h2 className="text-base font-semibold" style={{ fontFamily: "'Fraunces', serif" }}>캘린더</h2>
+          <h2 className="text-base font-semibold">캘린더</h2>
           <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5">
             {(["day","week","month"] as const).map(v => (
               <button key={v} onClick={() => setCalView(v)}
@@ -1657,7 +1656,7 @@ function DeadlinesSection({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-xl mx-auto px-8 py-8">
-        <h2 className="text-3xl font-medium mb-1" style={{ fontFamily: "'Fraunces', serif" }}>마감 작업</h2>
+        <h2 className="text-3xl font-medium mb-1">마감 작업</h2>
         <p className="text-sm text-muted-foreground mb-8">시간대 없이 날짜만 지정된 작업 목록</p>
 
         {overdue.length > 0 && (
@@ -1672,7 +1671,7 @@ function DeadlinesSection({
                   <button onClick={() => onToggle(d.id)}><Circle size={18} className="text-red-400" /></button>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium">{d.title}</div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5" style={{ fontFamily: "'Geist Mono', monospace" }}>{d.dueDate}</div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5" >{d.dueDate}</div>
                   </div>
                   <span className="text-[11px] px-2.5 py-1 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">
                     {Math.abs(daysLeft(d.dueDate))}일 초과
@@ -1696,7 +1695,7 @@ function DeadlinesSection({
                   <button onClick={() => onToggle(d.id)}><Circle size={18} className="text-muted-foreground" /></button>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium">{d.title}</div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5" style={{ fontFamily: "'Geist Mono', monospace" }}>{d.dueDate}</div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5" >{d.dueDate}</div>
                   </div>
                   <span className={`text-[11px] px-2.5 py-1 rounded-full font-medium flex-shrink-0 ${dl <= 3 ? "bg-amber-100 text-amber-700" : "bg-muted text-muted-foreground"}`}>
                     D-{dl}
@@ -1861,7 +1860,7 @@ function GrassSection({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto px-8 py-8">
-        <h2 className="text-3xl font-medium mb-8" style={{ fontFamily: "'Fraunces', serif" }}>활동 기록 & 통계</h2>
+        <h2 className="text-3xl font-medium mb-8">활동 기록 & 통계</h2>
 
         {/* Stats row */}
         <div className="grid grid-cols-3 gap-4 mb-6">
@@ -1869,7 +1868,7 @@ function GrassSection({
           <div className="p-5 rounded-xl border bg-card">
             <div className="text-[11px] text-muted-foreground mb-3">오늘 체크리스트 달성률</div>
             <div className="flex items-end gap-3">
-              <div className="text-3xl font-semibold" style={{ fontFamily: "'Fraunces', serif" }}>{completionRate}%</div>
+              <div className="text-3xl font-semibold">{completionRate}%</div>
               <CircleProgress value={completionRate} size={44} />
             </div>
             <div className="mt-3 h-1 rounded-full bg-muted overflow-hidden">
@@ -1880,7 +1879,7 @@ function GrassSection({
           {/* Focus time vs editable goal */}
           <div className="p-5 rounded-xl border bg-card">
             <div className="text-[11px] text-muted-foreground mb-1">오늘 집중 시간</div>
-            <div className="text-3xl font-semibold mt-1" style={{ fontFamily: "'Geist Mono', monospace" }}>
+            <div className="text-3xl font-semibold mt-1" >
               {fmt2(Math.floor(focusedMin / 60))}<span className="text-base font-normal text-muted-foreground">h </span>
               {fmt2(focusedMin % 60)}<span className="text-base font-normal text-muted-foreground">m</span>
             </div>
@@ -1894,8 +1893,7 @@ function GrassSection({
                     value={goalInput}
                     onChange={e => setGoalInput(e.target.value)}
                     className="w-14 px-1.5 py-0.5 text-xs rounded bg-muted outline-none focus:ring-1 focus:ring-ring"
-                    style={{ fontFamily: "'Geist Mono', monospace" }}
-                  />
+                                     />
                   <span className="text-[11px] text-muted-foreground">시간</span>
                   <button type="submit" className="p-0.5 text-green-600 hover:text-green-700"><Check size={12} /></button>
                 </form>
@@ -1904,7 +1902,7 @@ function GrassSection({
                   onClick={() => { setGoalInput(String((goalMin / 60).toFixed(1))); setEditingGoal(true); }}
                   className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground group"
                 >
-                  <span style={{ fontFamily: "'Geist Mono', monospace" }}>
+                  <span >
                     {Math.floor(goalMin / 60)}h{goalMin % 60 > 0 ? ` ${goalMin % 60}m` : ""}
                   </span>
                   <Edit3 size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -1925,7 +1923,7 @@ function GrassSection({
             <div className="text-[11px] text-muted-foreground mb-1 flex items-center gap-1">
               <Flame size={11} /> 이번 달
             </div>
-            <div className="text-3xl font-semibold mt-2" style={{ fontFamily: "'Fraunces', serif" }}>{achievedDays}일</div>
+            <div className="text-3xl font-semibold mt-2">{achievedDays}일</div>
             <div className="text-[11px] text-muted-foreground mt-1">목표 달성 · {activeDays}일 활동</div>
           </div>
         </div>
@@ -2027,7 +2025,7 @@ function GrassSection({
                   {!isFuture && data.focusMin > 0 && (
                     <div
                       className="text-[9px] font-semibold mb-0.5"
-                      style={{ fontFamily: "'Geist Mono', monospace", color: data.goalMet ? "#16a34a" : undefined }}
+                      style={{ color: data.goalMet ? "#16a34a" : undefined }}
                     >
                       {Math.floor(data.focusMin / 60)}h{data.focusMin % 60 > 0 ? ` ${data.focusMin % 60}m` : ""}
                     </div>
@@ -2074,7 +2072,7 @@ function GrassSection({
                   <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
                     <div className="h-full rounded-full transition-all" style={{ width: `${total > 0 ? (done / total) * 100 : 0}%`, backgroundColor: color }} />
                   </div>
-                  <span className="text-[11px] text-muted-foreground w-8 text-right flex-shrink-0" style={{ fontFamily: "'Geist Mono', monospace" }}>
+                  <span className="text-[11px] text-muted-foreground w-8 text-right flex-shrink-0" >
                     {done}/{total}
                   </span>
                 </div>
@@ -2100,7 +2098,7 @@ function SettingsSection({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-lg mx-auto px-8 py-8">
-        <h2 className="text-3xl font-medium mb-2" style={{ fontFamily: "'Fraunces', serif" }}>설정</h2>
+        <h2 className="text-3xl font-medium mb-2">설정</h2>
         <p className="text-sm text-muted-foreground mb-8">타이머 · 알림 · 뽀모도로 설정</p>
 
         <div className="space-y-4">
@@ -2291,10 +2289,10 @@ function BlockDetailPanel({
         <div>
           <div className="text-[11px] font-medium text-muted-foreground mb-1.5">계획 시간</div>
           <div className="px-3 py-2.5 rounded-lg bg-muted/40 border border-border">
-            <div className="text-[11px] text-muted-foreground" style={{ fontFamily: "'Geist Mono', monospace" }}>
+            <div className="text-[11px] text-muted-foreground" >
               {block.date} ({DAYS_KO[parseLocalDate(block.date).getDay()]})
             </div>
-            <div className="text-sm font-medium mt-0.5" style={{ fontFamily: "'Geist Mono', monospace" }}>
+            <div className="text-sm font-medium mt-0.5" >
               {fmtTime(block.startH, block.startM)} – {fmtTime(block.endH, block.endM)}
             </div>
             <div className="text-[11px] text-muted-foreground mt-0.5">{durMin(block)}분</div>
@@ -2346,7 +2344,7 @@ function BlockDetailPanel({
                   </button>
                   <span className="w-0.5 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: cb.color }} />
                   <span className={`flex-1 truncate ${cb.completed ? "line-through text-muted-foreground" : ""}`}>{cb.title}</span>
-                  <span className="text-muted-foreground flex-shrink-0" style={{ fontFamily: "'Geist Mono', monospace" }}>
+                  <span className="text-muted-foreground flex-shrink-0" >
                     {fmtTime(cb.startH, cb.startM)}-{fmtTime(cb.endH, cb.endM)}
                   </span>
                 </div>
@@ -2467,8 +2465,7 @@ function BlockDetailPanel({
                           onChange={e => setRepeatEndCount(Number(e.target.value))}
                           onClick={() => setRepeatEndType("count")}
                           className="w-12 px-1.5 py-0.5 text-[11px] rounded bg-muted outline-none focus:ring-1 focus:ring-ring"
-                          style={{ fontFamily: "'Geist Mono', monospace" }}
-                        />회 반복 후 종료
+                                                 />회 반복 후 종료
                       </span>
                     )}
                     {et === "date" && (

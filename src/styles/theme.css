@@ -79,6 +79,7 @@
 }
 
 @theme inline {
+  --font-sans: 'Cafe24Ssurround', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -126,6 +127,7 @@
 
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
   }
 
   /**
