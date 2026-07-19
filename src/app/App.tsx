@@ -15,6 +15,7 @@ import {
 } from "../lib/api";
 import { type TimerState, fmtSec } from "../lib/timer";
 import { emit, listen } from "@tauri-apps/api/event";
+import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useTimerWindow } from "./useTimerWindow";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -109,6 +110,15 @@ const MONTHS_KO = ["1월","2월","3월","4월","5월","6월","7월","8월","9월
 let TODAY_DATE = parseLocalDate(TODAY_STR);
 let TODAY_LABEL = `${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`;
 
+// 뽀모도로 phase 전환 시 OS 네이티브 알림 발송 — 권한 없으면 조용히 무시
+async function notifyPomodoro(title: string, body: string) {
+  try {
+    const granted = await isPermissionGranted();
+    if (!granted) return;
+    sendNotification({ title, body });
+  } catch (e) { console.error(e); }
+}
+
 // 실제 날짜가 바뀌었으면 위 세 변수를 갱신하고 true를 반환 (안 바뀌었으면 false)
 function syncTodayIfChanged(): boolean {
   const real = toDateStr(new Date());
@@ -155,6 +165,29 @@ export default function App() {
   const [sessions, setSessions] = useState<TimerSession[]>([]);
   const currentSessionIdRef = useRef<string | null>(null);
 
+  // Pomodoro / settings — timer effect들이 이 상태를 참조하므로 반드시 그 앞에서 선언돼야 함
+  const [pomodoroOn, setPomodoroOn] = useState(false);
+  const [pomWork, setPomWork] = useState(25);
+  const [pomBreak, setPomBreak] = useState(5);
+  const [abandonMin, setAbandonMin] = useState(15);
+
+  // 뽀모도로 사이클 상태 — timerState="running"이고 pomodoroOn=true일 때만 의미
+  // pomPhase: 지금 집중 중인지 휴식 중인지. pomPhaseSec: 현재 phase에서 흐른 초.
+  // 휴식 중일 때는 timerSec/Supabase focus 세션 모두 정지, phase만 카운트업.
+  const [pomPhase, setPomPhase] = useState<"focus" | "break">("focus");
+  const [pomPhaseSec, setPomPhaseSec] = useState(0);
+
+  // 뽀모도로 켤 때 알림 권한 요청 — 이미 허용돼 있으면 no-op
+  useEffect(() => {
+    if (!pomodoroOn) return;
+    (async () => {
+      try {
+        const granted = await isPermissionGranted();
+        if (!granted) await requestPermission();
+      } catch (e) { console.error(e); }
+    })();
+  }, [pomodoroOn]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -177,6 +210,8 @@ export default function App() {
 
   const startSession = async () => {
     setTimerState("running");
+    setPomPhase("focus");
+    setPomPhaseSec(0);
     try {
       const session = await startTimerSession(TODAY_STR);
       currentSessionIdRef.current = session.id;
@@ -186,6 +221,8 @@ export default function App() {
 
   const endSession = async (reason: "manual" | "auto") => {
     setTimerState(reason === "manual" ? "stopped" : "auto-paused");
+    setPomPhase("focus");
+    setPomPhaseSec(0);
     const sid = currentSessionIdRef.current;
     currentSessionIdRef.current = null;
     if (!sid) return;
@@ -200,8 +237,9 @@ export default function App() {
 
   // 뜬 타이머 창(별도 webview)과의 상태 동기화 — 매초 자연스럽게 브로드캐스트됨
   useEffect(() => {
-    emit("timer:state", { timerState, timerSec });
-  }, [timerState, timerSec]);
+    const pomPhaseRemainSec = Math.max(0, (pomPhase === "focus" ? pomWork : pomBreak) * 60 - pomPhaseSec);
+    emit("timer:state", { timerState, timerSec, pomodoroOn, pomPhase, pomPhaseRemainSec });
+  }, [timerState, timerSec, pomodoroOn, pomPhase, pomPhaseSec, pomWork, pomBreak]);
 
   // 뜬 타이머 창에서 온 시작/정지 요청 처리 — Supabase 쓰기는 항상 이 메인 창에서만 발생
   useEffect(() => {
@@ -239,12 +277,6 @@ export default function App() {
     return () => clearInterval(id);
   }, [timerState]);
 
-  // Pomodoro / settings
-  const [pomodoroOn, setPomodoroOn] = useState(false);
-  const [pomWork, setPomWork] = useState(25);
-  const [pomBreak, setPomBreak] = useState(5);
-  const [abandonMin, setAbandonMin] = useState(15);
-
   // Calendar UI state
   const [calView, setCalView] = useState<"day" | "week" | "month">("week");
   const [calMode, setCalMode] = useState<"grid" | "list">("grid");
@@ -252,9 +284,50 @@ export default function App() {
 
   useEffect(() => {
     if (timerState !== "running") return;
-    const id = setInterval(() => setTimerSec(s => s + 1), 1000);
+    const id = setInterval(() => {
+      // 뽀모도로 휴식 중이면 누적 집중 시간(timerSec)은 늘리지 않고 phase 시간만 늘림
+      if (pomodoroOn && pomPhase === "break") {
+        setPomPhaseSec(s => s + 1);
+      } else {
+        setTimerSec(s => s + 1);
+        if (pomodoroOn) setPomPhaseSec(s => s + 1);
+      }
+    }, 1000);
     return () => clearInterval(id);
-  }, [timerState]);
+  }, [timerState, pomodoroOn, pomPhase]);
+
+  // 뽀모도로 phase 전환 — 집중이 pomWork분 지나면 자동으로 휴식, 휴식이 pomBreak분 지나면
+  // 자동으로 다시 집중. 집중 종료 시 Supabase focus 세션 마감, 휴식 종료 시 새 세션 시작.
+  useEffect(() => {
+    if (!pomodoroOn || timerState !== "running") return;
+    const targetSec = (pomPhase === "focus" ? pomWork : pomBreak) * 60;
+    if (pomPhaseSec < targetSec) return;
+
+    (async () => {
+      if (pomPhase === "focus") {
+        const sid = currentSessionIdRef.current;
+        currentSessionIdRef.current = null;
+        if (sid) {
+          try {
+            await endTimerSession(sid, "manual");
+            setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: "manual" } : x));
+          } catch (e) { console.error(e); }
+        }
+        setPomPhase("break");
+        setPomPhaseSec(0);
+        notifyPomodoro("집중 완료", `${pomBreak}분 쉬어요`);
+      } else {
+        try {
+          const session = await startTimerSession(TODAY_STR);
+          currentSessionIdRef.current = session.id;
+          setSessions(s => [...s, session]);
+        } catch (e) { console.error(e); }
+        setPomPhase("focus");
+        setPomPhaseSec(0);
+        notifyPomodoro("휴식 완료", `다시 ${pomWork}분 집중해요`);
+      }
+    })();
+  }, [pomPhaseSec, pomPhase, pomodoroOn, timerState, pomWork, pomBreak]);
 
   const toggleBlock = (id: string) => {
     const target = blocks.find(b => b.id === id);
@@ -470,6 +543,9 @@ export default function App() {
             sessions={sessions}
             onStart={startSession}
             onManualStop={() => endSession("manual")}
+            pomodoroOn={pomodoroOn}
+            pomPhase={pomPhase}
+            pomPhaseRemainSec={Math.max(0, (pomPhase === "focus" ? pomWork : pomBreak) * 60 - pomPhaseSec)}
           />
         </div>
 
@@ -616,16 +692,21 @@ export default function App() {
 // "일시정지" 버튼이 없고 시작/정지만 있음.
 function GlobalTimer({
   timerState, timerSec, sessions, onStart, onManualStop,
+  pomodoroOn, pomPhase, pomPhaseRemainSec,
 }: {
   timerState: TimerState;
   timerSec: number;
   sessions: TimerSession[];
   onStart: () => void;
   onManualStop: () => void;
+  pomodoroOn: boolean;
+  pomPhase: "focus" | "break";
+  pomPhaseRemainSec: number;
 }) {
   const isRunning = timerState === "running";
   const isAutoPaused = timerState === "auto-paused";
   const isStopped = timerState === "stopped";
+  const isBreak = pomodoroOn && isRunning && pomPhase === "break";
   const [showHistory, setShowHistory] = useState(false);
   const floatWin = useTimerWindow();
 
@@ -633,7 +714,9 @@ function GlobalTimer({
     <div className="relative">
       <div
         className={`flex items-center gap-3 px-4 py-1.5 rounded-xl border transition-all ${
-          isRunning
+          isBreak
+            ? "bg-sky-50 border-sky-200"
+            : isRunning
             ? "bg-green-50 border-green-200"
             : isAutoPaused
             ? "bg-amber-50 border-amber-200"
@@ -644,6 +727,7 @@ function GlobalTimer({
         <div className="flex items-center gap-2">
           <span
             className={`size-2 rounded-full flex-shrink-0 ${
+              isBreak ? "bg-sky-500 animate-pulse" :
               isRunning ? "bg-green-500 animate-pulse" :
               isAutoPaused ? "bg-amber-400" :
               "bg-muted-foreground/40"
@@ -651,14 +735,25 @@ function GlobalTimer({
           />
           <span
             className={`text-[11px] font-medium w-16 ${
+              isBreak ? "text-sky-700" :
               isRunning ? "text-green-700" :
               isAutoPaused ? "text-amber-700" :
               "text-muted-foreground"
             }`}
           >
-            {isRunning ? "집중 중" : isAutoPaused ? "자동 정지" : "정지됨"}
+            {isBreak ? "휴식 중" : isRunning ? "집중 중" : isAutoPaused ? "자동 정지" : "정지됨"}
           </span>
         </div>
+
+        {/* 뽀모도로 phase 남은 시간 — 활성일 때만 노출 */}
+        {pomodoroOn && isRunning && (
+          <span
+            className={`text-[11px] tabular-nums font-medium ${isBreak ? "text-sky-700" : "text-green-700"}`}
+            title={isBreak ? "휴식 남은 시간" : "집중 남은 시간"}
+          >
+            {fmtSec(pomPhaseRemainSec)}
+          </span>
+        )}
 
         {/* Timer display — click to see today's focus/rest session history */}
         <button

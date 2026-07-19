@@ -42,6 +42,7 @@
     "@radix-ui/react-tooltip": "1.1.8",
     "@supabase/supabase-js": "^2.110.0",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-notification": "^2.3.3",
     "canvas-confetti": "1.9.4",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
