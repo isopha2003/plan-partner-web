@@ -3,7 +3,7 @@ import {
   CheckCircle2, Circle, Clock, Play, Pause,
   Plus, X, ChevronLeft, ChevronRight, List, Grid3x3,
   BarChart2, Settings, Calendar, Target, Flame,
-  Edit3, Check, AlertCircle, PictureInPicture2 as PictureInPicture,
+  Edit3, Check, AlertCircle, Info, PictureInPicture2 as PictureInPicture,
 } from "lucide-react";
 import {
   fetchTemplates, createTemplate, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
@@ -15,7 +15,6 @@ import {
 } from "../lib/api";
 import { type TimerState, fmtSec } from "../lib/timer";
 import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTimerWindow } from "./useTimerWindow";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -196,21 +195,8 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
-  // 창 포커스 이탈 → 실행중이었다면 자동 일시정지 / 창 포커스 복귀 → 자동 일시정지였다면 자동 재시작.
-  // 수동 정지 상태는 이 로직과 무관 — 포커스가 어떻게 되든 아무 반응 없음.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    getCurrentWindow()
-      .onFocusChanged(({ payload: focused }) => {
-        if (!focused) {
-          if (timerState === "running") endSession("auto");
-        } else {
-          if (timerState === "auto-paused") startSession();
-        }
-      })
-      .then((fn) => { unlisten = fn; });
-    return () => unlisten?.();
-  }, [timerState]);
+  // 타이머 시작/정지는 오직 사용자가 버튼을 눌러서만 발생 — 창 포커스 등 자동 트리거 없음
+  // (예전에는 창 포커스 이탈 시 자동 일시정지했지만 의도치 않게 끊기는 문제로 비활성화)
 
   // 뜬 타이머 창(별도 webview)과의 상태 동기화 — 매초 자연스럽게 브로드캐스트됨
   useEffect(() => {
@@ -1024,6 +1010,7 @@ function CalendarSection({
   const [viewDate, setViewDate] = useState(TODAY_DATE);
   const [saveTplName, setSaveTplName] = useState("");
   const [showSaveTpl, setShowSaveTpl] = useState(false);
+  const [showTplHelp, setShowTplHelp] = useState(false);
   const [showNewTpl, setShowNewTpl] = useState(false);
   const [newTplTitle, setNewTplTitle] = useState("");
   const [newTplColor, setNewTplColor] = useState("#6B9B37");
@@ -1581,9 +1568,24 @@ function CalendarSection({
 
               {/* Schedule templates */}
               <div className="mt-3 pt-2 border-t border-sidebar-border">
-                <div className="text-[10px] font-medium text-muted-foreground px-2 py-1 uppercase tracking-wide">저장된 일정</div>
-                {scheduleTemplates.length === 0 && (
-                  <p className="text-[10px] text-muted-foreground px-2 py-1 leading-tight">저장된 일정이 없어요.<br/>헤더의 "이 날 저장"을 눌러 저장하세요.</p>
+                <div className="flex items-center justify-between px-2 py-1">
+                  <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">저장된 일정</div>
+                  <button
+                    onClick={() => setShowTplHelp(v => !v)}
+                    title="사용법"
+                    className={`p-0.5 rounded transition-colors ${showTplHelp ? "text-foreground bg-sidebar-accent" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    <Info size={11} />
+                  </button>
+                </div>
+                {showTplHelp && (
+                  <div className="text-[10px] text-muted-foreground bg-sidebar-accent/60 rounded-md px-2 py-1.5 mx-2 mb-1 leading-snug space-y-1">
+                    <p><span className="text-foreground font-medium">저장:</span> 지금 보고 있는 날짜에 만들어둔 시간 블록들을 하나의 세트로 저장해요.</p>
+                    <p><span className="text-foreground font-medium">적용:</span> 다른 날짜로 이동한 뒤 아래 목록 항목에 마우스를 올리면 나오는 <span className="text-foreground font-medium">적용</span> 버튼을 눌러 그 날에 붙여넣어요. 이미 잡힌 일정과 겹치는 시간대는 자동으로 건너뜁니다.</p>
+                  </div>
+                )}
+                {scheduleTemplates.length === 0 && !showTplHelp && (
+                  <p className="text-[10px] text-muted-foreground px-2 py-1 leading-tight">저장된 일정이 없어요.<br/>아래 "이 날 일정 저장"을 눌러 저장하세요.</p>
                 )}
                 {scheduleTemplates.map(st => (
                   <div key={st.id} className="group/st flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-sidebar-accent text-xs">
