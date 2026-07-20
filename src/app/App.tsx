@@ -2024,6 +2024,22 @@ function GrassSection({
   const achievedDays = monthDays.filter(d => getDayData(d).goalMet).length;
   const activeDays = monthDays.filter(d => getDayData(d).activities.length > 0).length;
 
+  // 오늘까지 이어지는 연속 목표 달성 일수 — 오늘이 아직 달성 안 됐어도 어제 이전 스트릭은
+  // 살아있는 것으로 취급 (오늘 시간이 남았으니 유예). 뷰 월과 무관하게 실제 오늘 기준으로 계산.
+  const currentStreak = (() => {
+    let streak = 0;
+    const cur = parseLocalDate(TODAY_STR);
+    for (let i = 0; i < 366; i++) {
+      const dstr = toDateStr(cur);
+      const isToday = dstr === TODAY_STR;
+      const met = getDayData(dstr).goalMet;
+      if (met) streak++;
+      else if (!isToday) break;
+      cur.setDate(cur.getDate() - 1);
+    }
+    return streak;
+  })();
+
   const tagStats = [
     { tag: "공부", color: "#5B7EA8" },
     { tag: "개발", color: "#7B5EA7" },
@@ -2099,10 +2115,11 @@ function GrassSection({
           {/* This month summary */}
           <div className="p-5 rounded-xl border bg-card">
             <div className="text-[11px] text-muted-foreground mb-1 flex items-center gap-1">
-              <Flame size={11} /> 이번 달
+              <Flame size={11} /> 연속 일수
             </div>
-            <div className="text-3xl font-semibold mt-2">{achievedDays}일</div>
-            <div className="text-[11px] text-muted-foreground mt-1">목표 달성 · {activeDays}일 활동</div>
+            <div className="text-3xl font-semibold mt-2">{currentStreak}일</div>
+            <div className="text-[11px] text-muted-foreground mt-1">이번 달 {activeDays}일 활동</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">목표 달성 {achievedDays}일</div>
           </div>
         </div>
 
