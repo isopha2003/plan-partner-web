@@ -198,6 +198,17 @@ export default function App() {
   // 오늘은 실시간 timerSec을 별도로 쓰므로 여기엔 굳이 반영 안 함(포함되어도 무해).
   const [focusSecByDate, setFocusSecByDate] = useState<Record<string, number>>({});
 
+  // 다크 모드 — localStorage에 저장해 재시작 시에도 유지. 첫 실행 기본값은 라이트.
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    try { return localStorage.getItem("theme") === "dark"; } catch { return false; }
+  });
+  useEffect(() => {
+    const root = document.documentElement;
+    if (darkMode) root.classList.add("dark");
+    else root.classList.remove("dark");
+    try { localStorage.setItem("theme", darkMode ? "dark" : "light"); } catch {}
+  }, [darkMode]);
+
   // Pomodoro / settings — timer effect들이 이 상태를 참조하므로 반드시 그 앞에서 선언돼야 함
   const [pomodoroOn, setPomodoroOn] = useState(false);
   const [pomWork, setPomWork] = useState(25);
@@ -688,6 +699,7 @@ export default function App() {
               pomWork={pomWork} setPomWork={setPomWork}
               pomBreak={pomBreak} setPomBreak={setPomBreak}
               abandonMin={abandonMin} setAbandonMin={setAbandonMin}
+              darkMode={darkMode} setDarkMode={setDarkMode}
             />
           )}
         </main>
@@ -2255,19 +2267,36 @@ function GrassSection({
 function SettingsSection({
   pomodoroOn, setPomodoroOn, pomWork, setPomWork,
   pomBreak, setPomBreak, abandonMin, setAbandonMin,
+  darkMode, setDarkMode,
 }: {
   pomodoroOn: boolean; setPomodoroOn: (v: boolean) => void;
   pomWork: number; setPomWork: (v: number) => void;
   pomBreak: number; setPomBreak: (v: number) => void;
   abandonMin: number; setAbandonMin: (v: number) => void;
+  darkMode: boolean; setDarkMode: (v: boolean) => void;
 }) {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-lg mx-auto px-8 py-8">
         <h2 className="text-3xl font-medium mb-2">설정</h2>
-        <p className="text-sm text-muted-foreground mb-8">타이머 · 알림 · 뽀모도로 설정</p>
+        <p className="text-sm text-muted-foreground mb-8">타이머 · 알림 · 뽀모도로 · 테마 설정</p>
 
         <div className="space-y-4">
+          <div className="p-5 rounded-xl border bg-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium">다크 모드</div>
+                <div className="text-[11px] text-muted-foreground mt-0.5">어두운 색상 테마 사용</div>
+              </div>
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className={`relative w-10 h-6 rounded-full transition-colors flex-shrink-0 ${darkMode ? "bg-primary" : "bg-muted"}`}
+              >
+                <span className={`absolute top-1 size-4 rounded-full bg-white shadow transition-all ${darkMode ? "left-5" : "left-1"}`} />
+              </button>
+            </div>
+          </div>
+
           <div className="p-5 rounded-xl border bg-card">
             <div className="flex items-center justify-between">
               <div>
