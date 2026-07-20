@@ -2335,23 +2335,6 @@ function SettingsSection({
                 className="w-40 px-3 py-2 rounded-lg bg-muted text-sm outline-none focus:ring-2 focus:ring-ring" />
             </div>
           </div>
-
-          <div className="p-5 rounded-xl border bg-card">
-            <div className="text-sm font-medium mb-1">알림 권한</div>
-            <div className="text-[11px] text-muted-foreground mb-4">뽀모도로·방치 알림을 받으려면 시스템 알림 권한이 필요해요. 뽀모도로를 켜면 자동으로 요청되지만, 미리 받아두려면 아래 버튼을 눌러주세요.</div>
-            <button
-              onClick={async () => {
-                try {
-                  const granted = await isPermissionGranted();
-                  if (!granted) await requestPermission();
-                } catch (e) { console.error(e); }
-              }}
-              className="px-4 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
-            >
-              알림 권한 요청
-            </button>
-            <p className="text-[11px] text-muted-foreground mt-3">※ 앱이 완전히 종료된 상태에서는 알림이 발송되지 않아요</p>
-          </div>
         </div>
       </div>
     </div>
