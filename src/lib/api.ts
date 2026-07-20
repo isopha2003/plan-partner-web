@@ -272,6 +272,22 @@ export async function deleteTodaySessions(date: string) {
   await db.execute("DELETE FROM timer_sessions WHERE date = ?", [date]);
 }
 
+// 지금까지 종료된 모든 세션을 날짜별로 집계 (초 단위). 캘린더/통계에서 과거 날짜의
+// 집중 시간을 표시할 때 사용. julianday 차이로 세션당 지속 시간을 초로 뽑고 date로 그룹.
+// 오늘 진행 중인 세션은 UI에서 실시간 timerSec으로 별도 처리되므로 여기서는 종료된 것만.
+export async function fetchFocusSecByDate(): Promise<Record<string, number>> {
+  const db = await getDb();
+  const rows = await db.select<any[]>(
+    `SELECT date, SUM((julianday(ended_at) - julianday(started_at)) * 86400) AS focus_sec
+       FROM timer_sessions
+      WHERE ended_at IS NOT NULL
+      GROUP BY date`
+  );
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.date] = Math.max(0, Math.round(Number(r.focus_sec) || 0));
+  return out;
+}
+
 // ── checklist_items (체크리스트형 자식 — 무제한 중첩) ─────────────
 export async function fetchChecklistItems(blockId: string) {
   const db = await getDb();

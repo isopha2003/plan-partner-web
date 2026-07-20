@@ -10,7 +10,7 @@ import {
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, insertBlocksBulk,
   fetchDeadlines, createDeadline, toggleDeadlineRow,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
-  fetchTodaySessions, startTimerSession, endTimerSession, deleteTodaySessions,
+  fetchTodaySessions, startTimerSession, endTimerSession, deleteTodaySessions, fetchFocusSecByDate,
   fetchChecklistItems, createChecklistItem, toggleChecklistItemRow, deleteChecklistItemRow,
 } from "../lib/api";
 import { type TimerState, fmtSec } from "../lib/timer";
@@ -194,6 +194,9 @@ export default function App() {
   const [timerSec, setTimerSec] = useState(0);
   const [sessions, setSessions] = useState<TimerSession[]>([]);
   const currentSessionIdRef = useRef<string | null>(null);
+  // 과거 날짜별 누적 집중 시간(초) — 캘린더 히트맵에서 어제 이전 집중 시간을 표시할 때 사용.
+  // 오늘은 실시간 timerSec을 별도로 쓰므로 여기엔 굳이 반영 안 함(포함되어도 무해).
+  const [focusSecByDate, setFocusSecByDate] = useState<Record<string, number>>({});
 
   // Pomodoro / settings — timer effect들이 이 상태를 참조하므로 반드시 그 앞에서 선언돼야 함
   const [pomodoroOn, setPomodoroOn] = useState(false);
@@ -234,6 +237,8 @@ export default function App() {
           return sum + Math.max(0, Math.round((new Date(s.endedAt).getTime() - new Date(s.startedAt).getTime()) / 1000));
         }, 0);
         setTimerSec(totalSec);
+        // 과거 날짜별 집중 시간 집계 로드
+        setFocusSecByDate(await fetchFocusSecByDate());
       } catch (e) { console.error(e); }
     })();
   }, []);
@@ -315,6 +320,8 @@ export default function App() {
           setSessions(await fetchTodaySessions(TODAY_STR));
         }
         setTimerSec(0);
+        // 어제 세션이 방금 마감돼 어제 집중 시간이 확정됐으니 히트맵 값도 갱신
+        setFocusSecByDate(await fetchFocusSecByDate());
       } catch (e) { console.error(e); }
       setDayTick(t => t + 1);
     }, 30000);
@@ -672,6 +679,7 @@ export default function App() {
               blocks={blocks.filter(b => !b.parentBlockId)}
               timerSec={timerSec}
               totalPlanMin={totalPlanMin}
+              focusSecByDate={focusSecByDate}
             />
           )}
           {section === "settings" && (
@@ -1928,16 +1936,14 @@ function DeadlinesSection({
 }
 
 // ── Activity Record Section (v3: monthly calendar) ────────────────
-const ACT_NAMES = ["운영체제", "알고리즘", "React 개발", "운동", "독서", "글쓰기", "수학", "영어"];
-const ACT_COLORS = ["#6B9B37", "#5B7EA8", "#C89A2E", "#D4622A", "#8B6E4E", "#4E8B6E", "#7B5EA7", "#A87B5E"];
-
 function GrassSection({
-  completionRate, blocks, timerSec, totalPlanMin,
+  completionRate, blocks, timerSec, totalPlanMin, focusSecByDate,
 }: {
   completionRate: number;
   blocks: Block[];
   timerSec: number;
   totalPlanMin: number;
+  focusSecByDate: Record<string, number>;
 }) {
   const [viewYear, setViewYear] = useState(2026);
   const [viewMonth, setViewMonth] = useState(6); // 0-indexed, 6 = July
@@ -1976,7 +1982,8 @@ function GrassSection({
   ];
   while (dayStrings.length % 7 !== 0) dayStrings.push(null);
 
-  // Deterministic activity data per day
+  // 그 날짜의 완료된 블록 목록과 총 집중 시간(분)을 실제 데이터에서 계산.
+  // 오늘은 실시간 timerSec을 쓰고, 과거는 timer_sessions에서 집계한 focusSecByDate를 사용.
   const getDayData = (dateStr: string): {
     activities: { title: string; color: string }[];
     focusMin: number;
@@ -1991,17 +1998,13 @@ function GrassSection({
       };
     }
     if (dateStr > TODAY_STR) return { activities: [], focusMin: 0, goalMet: false };
-    const d = parseLocalDate(dateStr);
-    const n = d.getDate() + d.getMonth() * 31 + (d.getFullYear() - 2026) * 365;
-    const seed = ((n * 17 + 7) % 97 + 97) % 97;
-    if (seed < 30) return { activities: [], focusMin: 0, goalMet: false };
-    const numActs = seed < 50 ? 1 : seed < 70 ? 2 : seed < 85 ? 3 : 4;
-    const fm = (seed % 5 + 1) * 40 + (n % 40);
-    const acts = Array.from({ length: Math.min(numActs, ACT_NAMES.length) }, (_, i) => {
-      const idx = (n + i * 3) % ACT_NAMES.length;
-      return { title: ACT_NAMES[idx], color: ACT_COLORS[idx] };
-    });
-    return { activities: acts, focusMin: fm, goalMet: fm >= 120 };
+    const completed = blocks.filter(b => b.date === dateStr && b.completed);
+    const fm = Math.floor((focusSecByDate[dateStr] ?? 0) / 60);
+    return {
+      activities: completed.map(b => ({ title: b.title, color: b.color })),
+      focusMin: fm,
+      goalMet: fm >= goalMin && goalMin > 0,
+    };
   };
 
   // Monthly summary stats

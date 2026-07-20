@@ -80,36 +80,16 @@ CREATE INDEX IF NOT EXISTS deadlines_due_date_idx ON deadlines (due_date);
 CREATE INDEX IF NOT EXISTS timer_sessions_date_idx ON timer_sessions (date);
 `;
 
-// 최초 실행 시 넣는 시드 블록 템플릿 (Supabase 0002_seed_templates.sql과 동일)
-const SEED_TEMPLATES: { title: string; color: string; tags: string[] }[] = [
-  { title: "운영체제 공부", color: "#6B9B37", tags: ["공부"] },
-  { title: "알고리즘 풀기", color: "#5B7EA8", tags: ["공부"] },
-  { title: "React 개발", color: "#7B5EA7", tags: ["개발"] },
-  { title: "저녁 운동", color: "#D4622A", tags: ["운동"] },
-  { title: "독서", color: "#8B6E4E", tags: ["루틴"] },
-  { title: "글쓰기", color: "#4E8B6E", tags: ["루틴"] },
-];
-
 let dbPromise: Promise<Database> | null = null;
 
-// 첫 호출 시 DB 파일 열고 스키마/시드 실행, 이후 호출은 같은 인스턴스 반환
+// 첫 호출 시 DB 파일 열고 스키마 초기화, 이후 호출은 같은 인스턴스 반환.
+// 시드 데이터는 넣지 않음 — 첫 실행은 완전히 빈 상태에서 시작
 export function getDb(): Promise<Database> {
   if (!dbPromise) {
     dbPromise = (async () => {
       const db = await Database.load("sqlite:planner.db");
-      // 스키마 안에 여러 문장이 있으므로 execute를 여러 번 호출
       for (const stmt of SCHEMA.split(";").map(s => s.trim()).filter(Boolean)) {
         await db.execute(stmt);
-      }
-      // 시드 — 템플릿이 하나도 없을 때만 넣음 (재실행 안전)
-      const rows = await db.select<{ n: number }[]>("SELECT COUNT(*) AS n FROM block_templates");
-      if (rows[0]?.n === 0) {
-        for (const t of SEED_TEMPLATES) {
-          await db.execute(
-            "INSERT INTO block_templates (id, title, color, tags) VALUES (?, ?, ?, ?)",
-            [crypto.randomUUID(), t.title, t.color, JSON.stringify(t.tags)]
-          );
-        }
       }
       return db;
     })();
