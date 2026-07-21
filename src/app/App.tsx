@@ -750,6 +750,10 @@ export default function App() {
               updateBlock(selectedBlock.id, { memo });
               setSelectedBlock({ ...selectedBlock, memo });
             }}
+            onTitleSave={(title) => {
+              updateBlock(selectedBlock.id, { title });
+              setSelectedBlock({ ...selectedBlock, title });
+            }}
             onSelectChild={setSelectedBlock}
             onToggleChild={toggleBlock}
             onAddTimeblockChild={(child) => addBlock({
@@ -1229,6 +1233,8 @@ function CalendarSection({
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
   const [dragBlockOffsetMin, setDragBlockOffsetMin] = useState(0); // minutes from block top to mouse
   const [dropTarget, setDropTarget] = useState<{ dayIdx: number; startH: number; startM: number } | null>(null);
+  // 마우스를 그리드에 올렸을 때 클릭하면 새 블록이 놓일 위치를 미리 보여주는 hover ghost
+  const [hoverSlot, setHoverSlot] = useState<{ dayIdx: number; startH: number } | null>(null);
   const [resizing, setResizing] = useState<{
     blockId: string; edge: "top" | "bottom";
     startY: number; origStartMin: number; origEndMin: number; blockDate: string;
@@ -1413,16 +1419,17 @@ function CalendarSection({
                   if (resizing || dragBlockId || dragTplId || justResizedRef.current) return;
                   const rect = e.currentTarget.getBoundingClientRect();
                   const durMin = 60;
-                  const rawMin = Math.max(0, Math.round(((e.clientY - rect.top) / HOUR_H) * 60 / 15) * 15);
-                  const startMin = Math.min(TOTAL_H * 60 - durMin, rawMin);
+                  // 정시(00분)에 스냅 — 사용자가 캘린더 직접 생성 시엔 00·01·02시 같은 딱 떨어지는 시각을 원함
+                  const clickedHour = Math.max(0, Math.min(TOTAL_H - 1, Math.floor((e.clientY - rect.top) / HOUR_H)));
+                  const startMin = clickedHour * 60;
                   const endMin = startMin + durMin;
                   if (hasOverlapForDate(dateStr, startMin, endMin)) return;
                   const newBlock: Block = {
                     id: `b-${Date.now()}`,
                     title: "새 블록",
                     color: "#5AA9E6",
-                    startH: Math.floor(startMin / 60),
-                    startM: startMin % 60,
+                    startH: clickedHour,
+                    startM: 0,
                     endH: Math.floor(endMin / 60),
                     endM: endMin % 60,
                     completed: false,
@@ -1430,8 +1437,16 @@ function CalendarSection({
                     memo: "",
                     date: dateStr,
                   };
+                  setHoverSlot(null);
                   onAddBlock(newBlock, { select: true });
                 }}
+                onMouseMove={e => {
+                  if (dragTplId || dragBlockId || resizing) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const hour = Math.max(0, Math.min(TOTAL_H - 1, Math.floor((e.clientY - rect.top) / HOUR_H)));
+                  setHoverSlot(prev => (prev?.dayIdx === di && prev.startH === hour) ? prev : { dayIdx: di, startH: hour });
+                }}
+                onMouseLeave={() => setHoverSlot(prev => (prev?.dayIdx === di ? null : prev))}
                 onDragOver={e => {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = dragBlockId ? "move" : "copy";
@@ -1484,6 +1499,25 @@ function CalendarSection({
                 {Array.from({ length: TOTAL_H }, (_, h) => (
                   <div key={h} className="absolute w-full border-t border-border/40 pointer-events-none" style={{ top: h * HOUR_H }} />
                 ))}
+
+                {/* Hover ghost — 마우스 올린 정시 슬롯에 새 블록이 놓일 자리 미리보기.
+                    이미 블록이 있는 시간대나 드래그·리사이즈 중일 땐 숨김. */}
+                {hoverSlot?.dayIdx === di && !isDropTarget && !dragBlockId && !dragTplId && !resizing
+                  && !hasOverlapForDate(dateStr, hoverSlot.startH * 60, hoverSlot.startH * 60 + 60) && (
+                  <div
+                    className="absolute left-0.5 right-0.5 rounded-lg pointer-events-none z-[6] transition-all bg-primary/5 ring-1 ring-primary/25"
+                    style={{
+                      top: hoverSlot.startH * HOUR_H,
+                      height: HOUR_H - 2,
+                      boxShadow: "0 6px 16px -6px rgba(90, 169, 230, 0.35), 0 2px 6px -2px rgba(90, 169, 230, 0.25)",
+                    }}
+                  >
+                    <div className="text-[10px] text-primary/70 px-1.5 pt-1 font-medium">+ 새 블록</div>
+                    <div className="text-[9px] text-primary/50 px-1.5 mt-0.5">
+                      {fmtTime(hoverSlot.startH, 0)} – {fmtTime(hoverSlot.startH + 1, 0)}
+                    </div>
+                  </div>
+                )}
 
                 {/* Drop ghost — template or block move */}
                 {isDropTarget && ghostStartMin !== null && (dragTemplate || dragBlock) && (() => {
@@ -3019,7 +3053,7 @@ function SettingsSection({
 
 // ── Block Detail Panel — no timer (v2) ─────────────────────────────
 function BlockDetailPanel({
-  block, childBlocks, templates, sameDayBlocks, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave,
+  block, childBlocks, templates, sameDayBlocks, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave, onTitleSave,
   onSelectChild, onToggleChild, onAddTimeblockChild, onGoToParent, onSetNextBlock,
 }: {
   block: Block;
@@ -3032,6 +3066,7 @@ function BlockDetailPanel({
   onDeleteRepeatGroup: (fromDate: string) => void;
   onSetRepeat: (repeat: BlockRepeat) => void;
   onMemoSave: (memo: string) => void;
+  onTitleSave: (title: string) => void;
   onSelectChild: (b: Block) => void;
   onToggleChild: (id: string) => void;
   onAddTimeblockChild: (child: { templateId: string; title: string; color: string; tags: string[]; startH: number; startM: number; endH: number; endM: number }) => void;
@@ -3039,6 +3074,16 @@ function BlockDetailPanel({
   onSetNextBlock: (nextBlockId: string | null) => void;
 }) {
   const [memo, setMemo] = useState(block.memo);
+  // 헤더의 제목 인라인 편집 — 캘린더 직접 생성 블록도 여기서 이름을 붙일 수 있음.
+  // Enter/blur로 저장, Esc로 취소. 빈 문자열은 무시하고 원래 제목 유지.
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(block.title);
+  const commitTitle = () => {
+    const trimmed = titleDraft.trim();
+    if (trimmed && trimmed !== block.title) onTitleSave(trimmed);
+    else setTitleDraft(block.title);
+    setEditingTitle(false);
+  };
 
   // 체크리스트형 자식(무제한 중첩) — block.id 기준으로 불러옴. 위 BlockDetailPanel은
   // key={selectedBlock.id}로 블록이 바뀔 때마다 통째로 리마운트되므로 이 useEffect는
@@ -3114,7 +3159,27 @@ function BlockDetailPanel({
       {/* Header */}
       <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-border flex-shrink-0">
         <span className="size-3 rounded-sm flex-shrink-0" style={{ backgroundColor: block.color }} />
-        <span className="text-sm font-medium flex-1 truncate">{block.title}</span>
+        {editingTitle ? (
+          <input
+            autoFocus
+            value={titleDraft}
+            onChange={e => setTitleDraft(e.target.value)}
+            onBlur={commitTitle}
+            onKeyDown={e => {
+              if (e.key === "Enter") { e.preventDefault(); commitTitle(); }
+              else if (e.key === "Escape") { setTitleDraft(block.title); setEditingTitle(false); }
+            }}
+            className="flex-1 min-w-0 text-sm font-medium bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-1 py-0.5"
+          />
+        ) : (
+          <button
+            onClick={() => { setTitleDraft(block.title); setEditingTitle(true); }}
+            title="제목 편집"
+            className="flex-1 min-w-0 text-left text-sm font-medium truncate hover:bg-muted/40 rounded px-1 py-0.5 transition-colors"
+          >
+            {block.title}
+          </button>
+        )}
         <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors flex-shrink-0">
           <X size={13} className="text-muted-foreground" />
         </button>
