@@ -3265,14 +3265,14 @@ function SettingsSection({
     flashTimersRef.current = [];
     setStatusMsg({ kind, text, target });
     setStatusVisible(false);
-    // 순서: mount(opacity-0) → 다음 페인트 프레임 뒤 opacity 0→1 (fade in 300ms) → 1s 유지 → opacity 1→0 (fade out 300ms) → unmount.
+    // 순서: mount(opacity-0) → 다음 페인트 프레임 뒤 opacity 0→1 (fade in 500ms) → 1s 유지 → opacity 1→0 (fade out 500ms) → unmount.
     // requestAnimationFrame을 두 번 감싸서 React 커밋 + 브라우저 첫 페인트가 완전히 끝난 뒤에
     // opacity 클래스를 바꾸도록 보장 — 안 그러면 브라우저가 opacity-0을 안 그리고 바로 opacity-100으로 뛰어 트랜지션이 안 걸리는 케이스가 있음.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => setStatusVisible(true));
     });
-    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(false), 1300));
-    flashTimersRef.current.push(window.setTimeout(() => setStatusMsg(null), 1650));
+    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(false), 1550));
+    flashTimersRef.current.push(window.setTimeout(() => setStatusMsg(null), 2100));
   };
   useEffect(() => () => { flashTimersRef.current.forEach(t => window.clearTimeout(t)); }, []);
 
@@ -3381,7 +3381,7 @@ function SettingsSection({
                 className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
               >{busy === "backup" ? "백업 중…" : "지금 백업"}</button>
               {statusMsg?.target === "backup" && (
-                <span className={`text-[11px] transition-opacity duration-300 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
+                <span className={`text-[11px] transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
                   {statusMsg.text}
                 </span>
               )}
@@ -3400,7 +3400,7 @@ function SettingsSection({
                 className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 disabled:opacity-50"
               >{busy === "update" ? "확인 중…" : "업데이트 확인"}</button>
               {statusMsg?.target === "update" && (
-                <span className={`text-[11px] transition-opacity duration-300 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
+                <span className={`text-[11px] transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
                   {statusMsg.text}
                 </span>
               )}
