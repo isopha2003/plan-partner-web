@@ -1907,7 +1907,7 @@ function CalendarSection({
                     placeholder="제목..."
                     className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
                   />
-                  {/* 프리셋 색상 팔레트 — 원하는 색을 바로 고르거나 오른쪽 color picker로 직접 지정 */}
+                  {/* 프리셋 색상 팔레트 + 마지막 '+'로 사용자 지정 색상 */}
                   <div className="flex items-center gap-1 flex-wrap">
                     {BLOCK_COLORS.map(c => (
                       <button
@@ -1919,22 +1919,25 @@ function CalendarSection({
                         title={c}
                       />
                     ))}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="color"
-                      value={newTplColor}
-                      onChange={e => setNewTplColor(e.target.value)}
-                      className="size-6 rounded cursor-pointer border border-border flex-shrink-0"
+                    <label
+                      className="size-5 rounded-full border border-dashed border-border/60 flex items-center justify-center cursor-pointer hover:bg-muted/40 transition-colors flex-shrink-0"
                       title="사용자 지정 색상"
-                    />
-                    <input
-                      value={newTplTags}
-                      onChange={e => setNewTplTags(e.target.value)}
-                      placeholder="태그 (쉼표로 구분)"
-                      className="flex-1 min-w-0 text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
-                    />
+                    >
+                      <input
+                        type="color"
+                        value={newTplColor}
+                        onChange={e => setNewTplColor(e.target.value)}
+                        className="sr-only"
+                      />
+                      <Plus size={10} className="text-muted-foreground" />
+                    </label>
                   </div>
+                  <input
+                    value={newTplTags}
+                    onChange={e => setNewTplTags(e.target.value)}
+                    placeholder="태그 (쉼표로 구분)"
+                    className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
+                  />
                   <div className="flex gap-1.5">
                     <button
                       onClick={() => {
@@ -3258,7 +3261,7 @@ function BlockDetailPanel({
           </div>
         </div>
 
-        {/* Color picker — 프리셋 팔레트 + 사용자 지정 color picker */}
+        {/* Color picker — 프리셋 팔레트 + 마지막 '+' 버튼으로 사용자 지정 색상 */}
         <div>
           <div className="text-[11px] font-medium text-muted-foreground mb-2">색상</div>
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -3272,13 +3275,19 @@ function BlockDetailPanel({
                 title={c}
               />
             ))}
-            <input
-              type="color"
-              value={block.color}
-              onChange={e => onColorSave(e.target.value)}
-              className="size-6 rounded cursor-pointer border border-border/50 ml-1 flex-shrink-0"
+            {/* 커스텀 색 — label로 감싼 숨겨진 native color picker. 클릭 시 OS 색상 대화상자 열림 */}
+            <label
+              className="size-6 rounded-full border border-dashed border-border/60 flex items-center justify-center cursor-pointer hover:bg-muted/40 transition-colors flex-shrink-0"
               title="사용자 지정 색상"
-            />
+            >
+              <input
+                type="color"
+                value={block.color}
+                onChange={e => onColorSave(e.target.value)}
+                className="sr-only"
+              />
+              <Plus size={12} className="text-muted-foreground" />
+            </label>
           </div>
         </div>
 
