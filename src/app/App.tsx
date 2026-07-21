@@ -3251,6 +3251,7 @@ function BlockDetailPanel({
   // Enter/blur로 저장, Esc로 취소. 빈 문자열은 무시하고 원래 제목 유지.
   const [editingTitle, setEditingTitle] = useState(!!initialEditTitle);
   const [titleDraft, setTitleDraft] = useState(block.title);
+  const [showBlockCustomColor, setShowBlockCustomColor] = useState(false);
   const commitTitle = () => {
     const trimmed = titleDraft.trim();
     if (trimmed && trimmed !== block.title) onTitleSave(trimmed);
