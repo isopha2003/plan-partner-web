@@ -616,9 +616,6 @@ export default function App() {
       {/* ── Global Header ── */}
       <header className="flex items-center gap-6 px-5 border-b border-border bg-card flex-shrink-0" style={{ height: 52 }}>
         <div className="flex items-center gap-2.5 flex-shrink-0">
-          <h1 className="text-base font-medium">
-            생활 플래너
-          </h1>
           <span className="text-[11px] text-muted-foreground hidden sm:block">{TODAY_LABEL}</span>
         </div>
 
