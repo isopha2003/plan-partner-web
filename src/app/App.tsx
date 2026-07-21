@@ -1531,7 +1531,7 @@ function CalendarSection({
                 {hoverSlot?.dayIdx === di && !isDropTarget && !dragBlockId && !dragTplId && !resizing
                   && !hasOverlapForDate(dateStr, hoverSlot.startMin, hoverSlot.startMin + 60) && (
                   <div
-                    className="absolute left-0.5 right-0.5 rounded-lg pointer-events-none z-[6] transition-all bg-primary/5 ring-1 ring-primary/25"
+                    className="absolute left-0.5 right-0.5 rounded-lg pointer-events-none z-[6] bg-primary/5 ring-1 ring-primary/25"
                     style={{
                       top: hoverSlot.startMin / 60 * HOUR_H,
                       height: HOUR_H - 2,
