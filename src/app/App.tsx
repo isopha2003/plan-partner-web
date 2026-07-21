@@ -1295,6 +1295,7 @@ function CalendarSection({
   const [showSaveTpl, setShowSaveTpl] = useState(false);
   const [showTplHelp, setShowTplHelp] = useState(false);
   const [showNewTpl, setShowNewTpl] = useState(false);
+  const [showTplCustomColor, setShowTplCustomColor] = useState(false);
   const [newTplTitle, setNewTplTitle] = useState("");
   const [newTplColor, setNewTplColor] = useState("#5AA9E6");
   const [newTplTags, setNewTplTags] = useState("");
@@ -1968,19 +1969,22 @@ function CalendarSection({
                         </button>
                       </div>
                     ))}
-                    <label
-                      className="size-5 rounded-full border border-border/70 bg-muted/40 hover:bg-muted flex items-center justify-center cursor-pointer transition-colors flex-shrink-0"
+                    <button
+                      type="button"
+                      onClick={() => setShowTplCustomColor(v => !v)}
+                      className={`size-5 rounded-full border flex items-center justify-center transition-colors flex-shrink-0 ${showTplCustomColor ? "border-primary/60 bg-primary/10" : "border-border/70 bg-muted/40 hover:bg-muted"}`}
                       title="사용자 지정 색상 추가"
                     >
-                      <input
-                        type="color"
-                        value={newTplColor}
-                        onChange={e => { setNewTplColor(e.target.value); onAddPaletteColor(e.target.value); }}
-                        className="sr-only"
-                      />
-                      <Plus size={10} className="text-muted-foreground" />
-                    </label>
+                      <Plus size={10} className={showTplCustomColor ? "text-primary" : "text-muted-foreground"} />
+                    </button>
                   </div>
+                  {showTplCustomColor && (
+                    <CustomColorPickerInline
+                      initial={newTplColor}
+                      onAdd={(color) => { setNewTplColor(color); onAddPaletteColor(color); }}
+                      onClose={() => setShowTplCustomColor(false)}
+                    />
+                  )}
                   <input
                     value={newTplTags}
                     onChange={e => setNewTplTags(e.target.value)}
@@ -2582,6 +2586,65 @@ const FOLDER_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#
 // localStorage에 저장되어 재실행 시에도 유지됨.
 const DEFAULT_BLOCK_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#6EE7B7", "#C89A2E", "#B05A7A"];
 const BLOCK_PALETTE_KEY = "block_palette_colors";
+
+// 팔레트에 커스텀 색을 추가할 때 뜨는 인라인 편집 카드.
+// native color picker의 onChange가 슬라이더 이동마다 마구 발동해 팔레트가 도배되는
+// 문제를 막기 위해, 여기서 draft만 갱신하고 "추가" 버튼을 눌러야만 실제 팔레트에 등록됨.
+function CustomColorPickerInline({ initial, onAdd, onClose }: {
+  initial: string;
+  onAdd: (color: string) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  const isValid = /^#[0-9a-fA-F]{6}$/.test(draft.trim());
+  const normalized = draft.trim();
+  const confirm = () => { if (isValid) { onAdd(normalized); onClose(); } };
+  const swatchColor = isValid ? normalized : "#5AA9E6";
+  return (
+    <div className="mt-2.5 p-2.5 rounded-xl border border-border bg-muted/30 space-y-2">
+      <div className="flex items-center gap-2">
+        <label
+          className="relative size-8 rounded-lg cursor-pointer border border-border/60 flex-shrink-0 hover:opacity-80 transition-opacity"
+          style={{ backgroundColor: swatchColor }}
+          title="색상 대화상자 열기"
+        >
+          <input
+            type="color"
+            value={swatchColor}
+            onChange={e => setDraft(e.target.value)}
+            className="sr-only"
+          />
+        </label>
+        <input
+          type="text"
+          autoFocus
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter") { e.preventDefault(); confirm(); }
+            else if (e.key === "Escape") { e.preventDefault(); onClose(); }
+          }}
+          placeholder="#5AA9E6"
+          maxLength={7}
+          className="flex-1 min-w-0 text-xs px-2 py-1.5 rounded-lg bg-card border border-border outline-none focus:ring-1 focus:ring-ring font-mono uppercase"
+        />
+      </div>
+      <div className="flex gap-1.5">
+        <button
+          type="button"
+          onClick={confirm}
+          disabled={!isValid}
+          className="flex-1 text-[11px] py-1.5 rounded-lg bg-primary text-primary-foreground font-medium disabled:opacity-40 transition-opacity"
+        >추가</button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex-1 text-[11px] py-1.5 rounded-lg bg-muted hover:bg-muted/60 text-foreground font-medium transition-colors"
+        >닫기</button>
+      </div>
+    </div>
+  );
+}
 
 // 마크다운 프리뷰 공용 클래스
 const PROSE_CLASS = "prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-p:my-2 prose-li:my-1 prose-code:before:hidden prose-code:after:hidden prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-a:text-primary";
@@ -3339,20 +3402,24 @@ function BlockDetailPanel({
                 </button>
               </div>
             ))}
-            {/* 커스텀 색 — label로 감싼 숨겨진 native color picker. 선택한 색을 팔레트에도 등록. */}
-            <label
-              className="size-6 rounded-full border border-border/70 bg-muted/40 hover:bg-muted flex items-center justify-center cursor-pointer transition-colors flex-shrink-0"
+            {/* 커스텀 색 — 클릭하면 아래에 인라인 편집 카드가 열림. "추가"를 눌러야만
+                실제 팔레트에 등록되어 native picker onChange 폭주로 색이 도배되는 문제 방지. */}
+            <button
+              type="button"
+              onClick={() => setShowBlockCustomColor(v => !v)}
+              className={`size-6 rounded-full border flex items-center justify-center transition-colors flex-shrink-0 ${showBlockCustomColor ? "border-primary/60 bg-primary/10" : "border-border/70 bg-muted/40 hover:bg-muted"}`}
               title="사용자 지정 색상 추가"
             >
-              <input
-                type="color"
-                value={block.color}
-                onChange={e => { onColorSave(e.target.value); onAddPaletteColor(e.target.value); }}
-                className="sr-only"
-              />
-              <Plus size={12} className="text-muted-foreground" />
-            </label>
+              <Plus size={12} className={showBlockCustomColor ? "text-primary" : "text-muted-foreground"} />
+            </button>
           </div>
+          {showBlockCustomColor && (
+            <CustomColorPickerInline
+              initial={block.color}
+              onAdd={(color) => { onColorSave(color); onAddPaletteColor(color); }}
+              onClose={() => setShowBlockCustomColor(false)}
+            />
+          )}
         </div>
 
         {/* Tags */}
