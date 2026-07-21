@@ -842,6 +842,7 @@ export default function App() {
           />
         )}
       </div>
+      <AppTooltipRoot />
     </div>
   );
 }
@@ -2586,6 +2587,101 @@ const FOLDER_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#
 // localStorage에 저장되어 재실행 시에도 유지됨.
 const DEFAULT_BLOCK_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#6EE7B7", "#C89A2E", "#B05A7A"];
 const BLOCK_PALETTE_KEY = "block_palette_colors";
+
+// 앱 전역 커스텀 툴팁 — [title] 속성이 붙은 아무 요소든 호버하면 native OS 툴팁 대신
+// 앱 톤에 맞는 스타일드 툴팁을 띄움. 기존 코드베이스의 title="..." 33개를 손대지 않고
+// 한 곳에서 룩앤필을 통일하기 위해 mouseover/out 캡처 리스너로 개입하는 방식.
+// - mouseover 시 title 속성을 순간적으로 비워 native 툴팁이 뜨는 걸 억제하고
+//   원본 값은 ref에 백업 → mouseout에서 복원 → 컴포넌트가 언마운트돼도 원상복구
+// - 350ms delay: 마우스가 스쳐 지나가는 경우엔 안 뜨게
+// - 위치: 트리거 요소 하단 중앙 8px 아래, 뷰포트 하단에 걸리면 위로 뒤집힘
+function AppTooltipRoot() {
+  const [tip, setTip] = useState<{ text: string; x: number; y: number; placement: "below" | "above" } | null>(null);
+  const currentEl = useRef<HTMLElement | null>(null);
+  const originalTitle = useRef<string | null>(null);
+  const showTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    const restore = () => {
+      if (currentEl.current && originalTitle.current !== null) {
+        try { currentEl.current.setAttribute("title", originalTitle.current); } catch {}
+      }
+      currentEl.current = null;
+      originalTitle.current = null;
+    };
+    const clearAll = () => {
+      if (showTimer.current !== null) { window.clearTimeout(showTimer.current); showTimer.current = null; }
+      restore();
+      setTip(null);
+    };
+
+    const onOver = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      const el = t.closest("[title]") as HTMLElement | null;
+      if (!el) { clearAll(); return; }
+      if (el === currentEl.current) return;
+      // 다른 요소로 옮겨감 — 기존 타이머·툴팁 정리
+      if (showTimer.current !== null) { window.clearTimeout(showTimer.current); showTimer.current = null; }
+      restore();
+      setTip(null);
+      const raw = el.getAttribute("title");
+      if (!raw) return;
+      currentEl.current = el;
+      originalTitle.current = raw;
+      try { el.setAttribute("title", ""); } catch {}
+      showTimer.current = window.setTimeout(() => {
+        if (!currentEl.current) return;
+        const rect = currentEl.current.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const belowY = rect.bottom + 8;
+        const wouldOverflow = belowY + 40 > window.innerHeight;
+        setTip({
+          text: raw,
+          x: centerX,
+          y: wouldOverflow ? rect.top - 8 : belowY,
+          placement: wouldOverflow ? "above" : "below",
+        });
+      }, 350);
+    };
+    const onOut = (e: MouseEvent) => {
+      const related = e.relatedTarget as Node | null;
+      if (!currentEl.current) return;
+      if (related && currentEl.current.contains(related)) return;
+      clearAll();
+    };
+    const onDown = () => clearAll();
+    const onScroll = () => clearAll();
+
+    document.addEventListener("mouseover", onOver, true);
+    document.addEventListener("mouseout", onOut, true);
+    document.addEventListener("mousedown", onDown, true);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mouseover", onOver, true);
+      document.removeEventListener("mouseout", onOut, true);
+      document.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("scroll", onScroll, true);
+      clearAll();
+    };
+  }, []);
+
+  if (!tip) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: tip.x,
+        top: tip.y,
+        transform: tip.placement === "below" ? "translate(-50%, 0)" : "translate(-50%, -100%)",
+        zIndex: 9999,
+      }}
+      className="pointer-events-none rounded-lg bg-foreground/95 text-background text-[11px] font-medium px-2.5 py-1 shadow-lg max-w-[240px] whitespace-normal leading-snug"
+    >
+      {tip.text}
+    </div>
+  );
+}
 
 // 팔레트에 커스텀 색을 추가할 때 뜨는 인라인 편집 카드.
 // native color picker의 onChange가 슬라이더 이동마다 마구 발동해 팔레트가 도배되는
