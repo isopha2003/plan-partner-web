@@ -3253,8 +3253,10 @@ function SettingsSection({
 }) {
   // 데이터 백업/업데이트 상태 — JSON export/import UI는 개인용에서 직관적이지 않아 제거,
   // 데이터 이전이 필요할 때는 %APPDATA%/…/backups 폴더의 .db 파일을 직접 복사하면 됨.
+  // 두 버튼의 busy 상태를 분리 — 하나 누르면 둘 다 disabled:opacity-50 로 깜빡이던 버그 방지.
   type Target = "backup" | "update";
-  const [busy, setBusy] = useState<null | Target>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
   // 상태 토스트를 각 버튼 옆에 인라인 표시 — target으로 어느 버튼에 붙일지 지정.
   const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string; target: Target } | null>(null);
   const [statusVisible, setStatusVisible] = useState(false);
@@ -3277,17 +3279,17 @@ function SettingsSection({
   useEffect(() => () => { flashTimersRef.current.forEach(t => window.clearTimeout(t)); }, []);
 
   const handleBackupNow = async () => {
-    setBusy("backup");
+    setBackupBusy(true);
     try {
       await createBackupNow();
       setLastBackupTs(getLastBackupTimestamp());
       flash("backup", "ok", "백업 성공");
     } catch (e: any) {
       flash("backup", "err", `백업 실패: ${e?.message ?? e}`);
-    } finally { setBusy(null); }
+    } finally { setBackupBusy(false); }
   };
   const handleUpdateCheck = async () => {
-    setBusy("update");
+    setUpdateBusy(true);
     try {
       const r = await checkForUpdate();
       if (r.status === "up-to-date") {
@@ -3301,7 +3303,7 @@ function SettingsSection({
       }
     } catch (e: any) {
       flash("update", "err", `업데이트 확인 실패: ${e?.message ?? e}`);
-    } finally { setBusy(null); }
+    } finally { setUpdateBusy(false); }
   };
 
   const lastBackupLabel = lastBackupTs
@@ -3377,9 +3379,9 @@ function SettingsSection({
             <div className="flex items-center gap-3">
               <button
                 onClick={handleBackupNow}
-                disabled={!!busy}
+                disabled={backupBusy}
                 className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
-              >{busy === "backup" ? "백업 중…" : "지금 백업"}</button>
+              >{backupBusy ? "백업 중…" : "지금 백업"}</button>
               {statusMsg?.target === "backup" && (
                 <span className={`text-[11px] transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
                   {statusMsg.text}
@@ -3396,9 +3398,9 @@ function SettingsSection({
             <div className="flex items-center gap-3">
               <button
                 onClick={handleUpdateCheck}
-                disabled={!!busy}
+                disabled={updateBusy}
                 className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
-              >{busy === "update" ? "확인 중…" : "업데이트 확인"}</button>
+              >{updateBusy ? "확인 중…" : "업데이트 확인"}</button>
               {statusMsg?.target === "update" && (
                 <span className={`text-[11px] transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
                   {statusMsg.text}
