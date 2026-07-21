@@ -2834,7 +2834,7 @@ function FolderChip({
       <span className="text-[10px] opacity-60">{count}</span>
       {onDelete && (
         <button
-          onClick={e => { e.stopPropagation(); if (confirm(`폴더 "${label}"을(를) 삭제할까요? 안의 메모는 폴더 없음으로 이동해요.`)) onDelete(); }}
+          onClick={e => { e.stopPropagation(); onDelete(); }}
           className="opacity-0 group-hover/chip:opacity-100 transition-opacity text-muted-foreground hover:text-destructive ml-0.5"
         ><X size={11} /></button>
       )}
