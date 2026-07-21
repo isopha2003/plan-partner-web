@@ -256,6 +256,7 @@ export default function App() {
   const [pomodoroOn, setPomodoroOn] = useState(false);
   const [pomWork, setPomWork] = useState(25);
   const [pomBreak, setPomBreak] = useState(5);
+  const [abandonOn, setAbandonOn] = useState(false);
   const [abandonMin, setAbandonMin] = useState(15);
 
   // 뽀모도로 사이클 상태 — timerState="running"이고 pomodoroOn=true일 때만 의미
@@ -772,6 +773,7 @@ export default function App() {
               pomodoroOn={pomodoroOn} setPomodoroOn={setPomodoroOn}
               pomWork={pomWork} setPomWork={setPomWork}
               pomBreak={pomBreak} setPomBreak={setPomBreak}
+              abandonOn={abandonOn} setAbandonOn={setAbandonOn}
               abandonMin={abandonMin} setAbandonMin={setAbandonMin}
               darkMode={darkMode} setDarkMode={setDarkMode}
             />
@@ -3242,21 +3244,26 @@ function NoteEditor({
 // ── Settings Section ───────────────────────────────────────────────
 function SettingsSection({
   pomodoroOn, setPomodoroOn, pomWork, setPomWork,
-  pomBreak, setPomBreak, abandonMin, setAbandonMin,
+  pomBreak, setPomBreak, abandonOn, setAbandonOn, abandonMin, setAbandonMin,
   darkMode, setDarkMode,
 }: {
   pomodoroOn: boolean; setPomodoroOn: (v: boolean) => void;
   pomWork: number; setPomWork: (v: number) => void;
   pomBreak: number; setPomBreak: (v: number) => void;
+  abandonOn: boolean; setAbandonOn: (v: boolean) => void;
   abandonMin: number; setAbandonMin: (v: number) => void;
   darkMode: boolean; setDarkMode: (v: boolean) => void;
 }) {
   // 데이터 백업/업데이트 상태 — JSON export/import UI는 개인용에서 직관적이지 않아 제거,
   // 데이터 이전이 필요할 때는 %APPDATA%/…/backups 폴더의 .db 파일을 직접 복사하면 됨.
   // 두 버튼의 busy 상태를 분리 — 하나 누르면 둘 다 disabled:opacity-50 로 깜빡이던 버그 방지.
+  // 추가로 ref 기반 재진입 가드 — React 재렌더 전에 클릭 이벤트가 중첩되어 setState가
+  // 반영되기 전 동일 핸들러가 두 번 실행되는 경우까지 막음.
   type Target = "backup" | "update";
   const [backupBusy, setBackupBusy] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const backupBusyRef = useRef(false);
+  const updateBusyRef = useRef(false);
   // 상태 토스트를 각 버튼 옆에 인라인 표시 — target으로 어느 버튼에 붙일지 지정.
   const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string; target: Target } | null>(null);
   const [statusVisible, setStatusVisible] = useState(false);
@@ -3279,6 +3286,8 @@ function SettingsSection({
   useEffect(() => () => { flashTimersRef.current.forEach(t => window.clearTimeout(t)); }, []);
 
   const handleBackupNow = async () => {
+    if (backupBusyRef.current) return;
+    backupBusyRef.current = true;
     setBackupBusy(true);
     try {
       await createBackupNow();
@@ -3286,9 +3295,14 @@ function SettingsSection({
       flash("backup", "ok", "백업 성공");
     } catch (e: any) {
       flash("backup", "err", `백업 실패: ${e?.message ?? e}`);
-    } finally { setBackupBusy(false); }
+    } finally {
+      setBackupBusy(false);
+      backupBusyRef.current = false;
+    }
   };
   const handleUpdateCheck = async () => {
+    if (updateBusyRef.current) return;
+    updateBusyRef.current = true;
     setUpdateBusy(true);
     try {
       const r = await checkForUpdate();
@@ -3303,7 +3317,10 @@ function SettingsSection({
       }
     } catch (e: any) {
       flash("update", "err", `업데이트 확인 실패: ${e?.message ?? e}`);
-    } finally { setUpdateBusy(false); }
+    } finally {
+      setUpdateBusy(false);
+      updateBusyRef.current = false;
+    }
   };
 
   const lastBackupLabel = lastBackupTs
@@ -3362,13 +3379,25 @@ function SettingsSection({
           </div>
 
           <div className="p-5 rounded-xl border bg-card">
-            <div className="text-sm font-medium mb-1">방치 알림</div>
-            <div className="text-[11px] text-muted-foreground mb-4">수동 정지 후 지정 시간이 지나면 브라우저 알림 발송</div>
-            <div>
-              <label className="block text-[11px] text-muted-foreground mb-1.5">알림 임계 시간 (분)</label>
-              <input type="number" min={1} value={abandonMin} onChange={e => setAbandonMin(Math.max(1, Number(e.target.value) || 1))}
-                className="w-40 px-3 py-2 rounded-lg bg-muted text-sm outline-none focus:ring-2 focus:ring-ring" />
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium">방치 알림</div>
+                <div className="text-[11px] text-muted-foreground mt-0.5">수동 정지 후 지정 시간이 지나면 브라우저 알림 발송</div>
+              </div>
+              <button
+                onClick={() => setAbandonOn(!abandonOn)}
+                className={`relative w-10 h-6 rounded-full transition-colors flex-shrink-0 ${abandonOn ? "bg-primary" : "bg-muted"}`}
+              >
+                <span className={`absolute top-1 size-4 rounded-full bg-white shadow transition-all ${abandonOn ? "left-5" : "left-1"}`} />
+              </button>
             </div>
+            {abandonOn && (
+              <div className="mt-4 pt-4 border-t border-border">
+                <label className="block text-[11px] text-muted-foreground mb-1.5">알림 임계 시간 (분)</label>
+                <input type="number" min={1} value={abandonMin} onChange={e => setAbandonMin(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-40 px-3 py-2 rounded-lg bg-muted text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+            )}
           </div>
 
           <div className="p-5 rounded-xl border bg-card">
