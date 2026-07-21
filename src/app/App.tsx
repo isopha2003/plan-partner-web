@@ -211,6 +211,36 @@ export default function App() {
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     try { return localStorage.getItem("theme") === "dark"; } catch { return false; }
   });
+
+  // 블록/템플릿 색상 팔레트 — 프리셋에서 시작해 사용자가 +로 커스텀 색 추가, X로 삭제 가능.
+  // localStorage에 저장해 다음 실행에도 유지.
+  const [paletteColors, setPaletteColors] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(BLOCK_PALETTE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.every(x => typeof x === "string")) return parsed;
+      }
+    } catch {}
+    return DEFAULT_BLOCK_COLORS;
+  });
+  const addPaletteColor = (color: string) => {
+    setPaletteColors(prev => {
+      const c = color.toLowerCase();
+      if (prev.some(x => x.toLowerCase() === c)) return prev;
+      const next = [...prev, color];
+      try { localStorage.setItem(BLOCK_PALETTE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+  const removePaletteColor = (color: string) => {
+    setPaletteColors(prev => {
+      const c = color.toLowerCase();
+      const next = prev.filter(x => x.toLowerCase() !== c);
+      try { localStorage.setItem(BLOCK_PALETTE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
   useEffect(() => {
     const root = document.documentElement;
     if (darkMode) root.classList.add("dark");
@@ -715,6 +745,9 @@ export default function App() {
               onDeleteTemplate={deleteScheduleTemplate}
               onAddTemplate={addTemplate}
               onDeleteBlockTemplate={deleteTemplate}
+              paletteColors={paletteColors}
+              onAddPaletteColor={addPaletteColor}
+              onRemovePaletteColor={removePaletteColor}
             />
           )}
           {section === "deadlines" && (
@@ -766,6 +799,9 @@ export default function App() {
               updateBlock(selectedBlock.id, { color });
               setSelectedBlock({ ...selectedBlock, color });
             }}
+            paletteColors={paletteColors}
+            onAddPaletteColor={addPaletteColor}
+            onRemovePaletteColor={removePaletteColor}
             onTitleSave={(title) => {
               const wasJustCreated = selectedBlock.id === justCreatedBlockId;
               updateBlock(selectedBlock.id, { title });
@@ -1218,6 +1254,7 @@ function CalendarSection({
   blocks, deadlines, templates, calView, setCalView, calMode, setCalMode,
   templateOpen, setTemplateOpen, onSelect, onToggle, onToggleDeadline, onAddBlock, onUpdateBlock, onUpdateBlockLocal, onDeleteBlock,
   scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate, onAddTemplate, onDeleteBlockTemplate,
+  paletteColors, onAddPaletteColor, onRemovePaletteColor,
 }: {
   blocks: Block[];
   deadlines: Deadline[];
@@ -1241,6 +1278,9 @@ function CalendarSection({
   onDeleteTemplate: (id: string) => void;
   onAddTemplate: (t: { title: string; color: string; tags: string[] }) => void;
   onDeleteBlockTemplate: (id: string) => void;
+  paletteColors: string[];
+  onAddPaletteColor: (color: string) => void;
+  onRemovePaletteColor: (color: string) => void;
 }) {
   const HOUR_H = 64;
   const TOTAL_H = 24;
@@ -1907,26 +1947,35 @@ function CalendarSection({
                     placeholder="제목..."
                     className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
                   />
-                  {/* 프리셋 색상 팔레트 + 마지막 '+'로 사용자 지정 색상 */}
-                  <div className="flex items-center gap-1 flex-wrap">
-                    {BLOCK_COLORS.map(c => (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => setNewTplColor(c)}
-                        className={`size-5 rounded-full transition-transform ${newTplColor.toLowerCase() === c.toLowerCase() ? "ring-2 ring-offset-1 ring-offset-sidebar-accent ring-foreground/40 scale-110" : ""}`}
-                        style={{ backgroundColor: c }}
-                        title={c}
-                      />
+                  {/* 프리셋/커스텀 색상 팔레트 — hover 시 X로 삭제, 마지막 '+'로 새 색 추가 */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {paletteColors.map(c => (
+                      <div key={c} className="relative group/color size-5 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setNewTplColor(c)}
+                          className={`size-5 rounded-full transition-transform ${newTplColor.toLowerCase() === c.toLowerCase() ? "ring-2 ring-offset-1 ring-offset-sidebar-accent ring-foreground/40 scale-110" : ""}`}
+                          style={{ backgroundColor: c }}
+                          title={c}
+                        />
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); onRemovePaletteColor(c); }}
+                          className="absolute -top-1 -right-1 size-3 rounded-full bg-card border border-border text-muted-foreground hover:text-destructive opacity-0 group-hover/color:opacity-100 transition-opacity flex items-center justify-center shadow-sm"
+                          title="팔레트에서 제거"
+                        >
+                          <X size={7} strokeWidth={2.5} />
+                        </button>
+                      </div>
                     ))}
                     <label
-                      className="size-5 rounded-full border border-dashed border-border/60 flex items-center justify-center cursor-pointer hover:bg-muted/40 transition-colors flex-shrink-0"
-                      title="사용자 지정 색상"
+                      className="size-5 rounded-full border border-border/70 bg-muted/40 hover:bg-muted flex items-center justify-center cursor-pointer transition-colors flex-shrink-0"
+                      title="사용자 지정 색상 추가"
                     >
                       <input
                         type="color"
                         value={newTplColor}
-                        onChange={e => setNewTplColor(e.target.value)}
+                        onChange={e => { setNewTplColor(e.target.value); onAddPaletteColor(e.target.value); }}
                         className="sr-only"
                       />
                       <Plus size={10} className="text-muted-foreground" />
@@ -2529,8 +2578,10 @@ const SORT_LABELS: Record<SortMode, string> = {
 // 폴더 색상 팔레트
 const FOLDER_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#4E8B6E", "#C89A2E", "#B05A7A"];
 // 블록/템플릿 프리셋 팔레트 — 파스텔 블루 톤을 축으로 대비색 몇 가지를 섞음.
-// 사용자 지정 색상은 별도 color picker로 자유롭게 고를 수 있음.
-const BLOCK_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#6EE7B7", "#C89A2E", "#B05A7A"];
+// 사용자가 '+' 버튼으로 커스텀 색을 추가/삭제할 수 있으며, 현재 팔레트는
+// localStorage에 저장되어 재실행 시에도 유지됨.
+const DEFAULT_BLOCK_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#6EE7B7", "#C89A2E", "#B05A7A"];
+const BLOCK_PALETTE_KEY = "block_palette_colors";
 
 // 마크다운 프리뷰 공용 클래스
 const PROSE_CLASS = "prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-p:my-2 prose-li:my-1 prose-code:before:hidden prose-code:after:hidden prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-a:text-primary";
@@ -3106,6 +3157,7 @@ function SettingsSection({
 // ── Block Detail Panel — no timer (v2) ─────────────────────────────
 function BlockDetailPanel({
   block, childBlocks, templates, sameDayBlocks, initialEditTitle, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave, onTitleSave, onColorSave,
+  paletteColors, onAddPaletteColor, onRemovePaletteColor,
   onSelectChild, onToggleChild, onAddTimeblockChild, onGoToParent, onSetNextBlock,
 }: {
   block: Block;
@@ -3121,6 +3173,9 @@ function BlockDetailPanel({
   onMemoSave: (memo: string) => void;
   onTitleSave: (title: string) => void;
   onColorSave: (color: string) => void;
+  paletteColors: string[];
+  onAddPaletteColor: (color: string) => void;
+  onRemovePaletteColor: (color: string) => void;
   onSelectChild: (b: Block) => void;
   onToggleChild: (id: string) => void;
   onAddTimeblockChild: (child: { templateId: string; title: string; color: string; tags: string[]; startH: number; startM: number; endH: number; endM: number }) => void;
@@ -3261,29 +3316,38 @@ function BlockDetailPanel({
           </div>
         </div>
 
-        {/* Color picker — 프리셋 팔레트 + 마지막 '+' 버튼으로 사용자 지정 색상 */}
+        {/* Color picker — hover 시 X로 색 제거, '+' 로 커스텀 색 추가(팔레트에 영구 등록) */}
         <div>
           <div className="text-[11px] font-medium text-muted-foreground mb-2">색상</div>
           <div className="flex items-center gap-1.5 flex-wrap">
-            {BLOCK_COLORS.map(c => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => onColorSave(c)}
-                className={`size-6 rounded-full transition-transform ${block.color.toLowerCase() === c.toLowerCase() ? "ring-2 ring-offset-1 ring-offset-card ring-foreground/40 scale-110" : ""}`}
-                style={{ backgroundColor: c }}
-                title={c}
-              />
+            {paletteColors.map(c => (
+              <div key={c} className="relative group/color size-6 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onColorSave(c)}
+                  className={`size-6 rounded-full transition-transform ${block.color.toLowerCase() === c.toLowerCase() ? "ring-2 ring-offset-1 ring-offset-card ring-foreground/40 scale-110" : ""}`}
+                  style={{ backgroundColor: c }}
+                  title={c}
+                />
+                <button
+                  type="button"
+                  onClick={e => { e.stopPropagation(); onRemovePaletteColor(c); }}
+                  className="absolute -top-1 -right-1 size-3.5 rounded-full bg-card border border-border text-muted-foreground hover:text-destructive opacity-0 group-hover/color:opacity-100 transition-opacity flex items-center justify-center shadow-sm"
+                  title="팔레트에서 제거"
+                >
+                  <X size={8} strokeWidth={2.5} />
+                </button>
+              </div>
             ))}
-            {/* 커스텀 색 — label로 감싼 숨겨진 native color picker. 클릭 시 OS 색상 대화상자 열림 */}
+            {/* 커스텀 색 — label로 감싼 숨겨진 native color picker. 선택한 색을 팔레트에도 등록. */}
             <label
-              className="size-6 rounded-full border border-dashed border-border/60 flex items-center justify-center cursor-pointer hover:bg-muted/40 transition-colors flex-shrink-0"
-              title="사용자 지정 색상"
+              className="size-6 rounded-full border border-border/70 bg-muted/40 hover:bg-muted flex items-center justify-center cursor-pointer transition-colors flex-shrink-0"
+              title="사용자 지정 색상 추가"
             >
               <input
                 type="color"
                 value={block.color}
-                onChange={e => onColorSave(e.target.value)}
+                onChange={e => { onColorSave(e.target.value); onAddPaletteColor(e.target.value); }}
                 className="sr-only"
               />
               <Plus size={12} className="text-muted-foreground" />
