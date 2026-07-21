@@ -20,7 +20,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { type TimerState, fmtSec } from "../lib/timer";
-import { runAutoBackupIfNeeded, createBackupNow, exportToJson, importFromJson, getLastBackupTimestamp } from "../lib/backup";
+import { runAutoBackupIfNeeded, createBackupNow, getLastBackupTimestamp } from "../lib/backup";
 import { checkForUpdate, installUpdate } from "../lib/updater";
 import { emit, listen } from "@tauri-apps/api/event";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
@@ -774,22 +774,6 @@ export default function App() {
               pomBreak={pomBreak} setPomBreak={setPomBreak}
               abandonMin={abandonMin} setAbandonMin={setAbandonMin}
               darkMode={darkMode} setDarkMode={setDarkMode}
-              // JSON 가져오기 이후 앱 전체 상태를 다시 로드 — 블록·템플릿·데드라인·타이머 세션까지.
-              onDataChanged={async () => {
-                try {
-                  const [tpls, blks, dls, sts, todaySess, focusMap] = await Promise.all([
-                    fetchTemplates(), fetchBlocks(), fetchDeadlines(), fetchScheduleTemplates(),
-                    fetchTodaySessions(TODAY_STR), fetchFocusSecByDate(),
-                  ]);
-                  setTemplates(tpls);
-                  setBlocks(blks);
-                  setDeadlines(dls);
-                  setScheduleTemplates(sts);
-                  setSessions(todaySess);
-                  setFocusSecByDate(focusMap);
-                  setSelectedBlock(null);
-                } catch (e) { console.error("reload after import failed", e); }
-              }}
             />
           )}
         </main>
@@ -3260,17 +3244,16 @@ function SettingsSection({
   pomodoroOn, setPomodoroOn, pomWork, setPomWork,
   pomBreak, setPomBreak, abandonMin, setAbandonMin,
   darkMode, setDarkMode,
-  onDataChanged,
 }: {
   pomodoroOn: boolean; setPomodoroOn: (v: boolean) => void;
   pomWork: number; setPomWork: (v: number) => void;
   pomBreak: number; setPomBreak: (v: number) => void;
   abandonMin: number; setAbandonMin: (v: number) => void;
   darkMode: boolean; setDarkMode: (v: boolean) => void;
-  onDataChanged: () => void;
 }) {
-  // 데이터 백업/내보내기/가져오기 상태
-  const [busy, setBusy] = useState<null | "backup" | "export" | "import" | "update">(null);
+  // 데이터 백업/업데이트 상태 — JSON export/import UI는 개인용에서 직관적이지 않아 제거,
+  // 데이터 이전이 필요할 때는 %APPDATA%/…/backups 폴더의 .db 파일을 직접 복사하면 됨.
+  const [busy, setBusy] = useState<null | "backup" | "update">(null);
   const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [lastBackupTs, setLastBackupTs] = useState<number | null>(getLastBackupTimestamp());
   const flash = (kind: "ok" | "err", text: string) => {
@@ -3281,34 +3264,11 @@ function SettingsSection({
   const handleBackupNow = async () => {
     setBusy("backup");
     try {
-      const path = await createBackupNow();
+      await createBackupNow();
       setLastBackupTs(getLastBackupTimestamp());
-      flash("ok", `백업 완료: ${path}`);
+      flash("ok", "백업 성공");
     } catch (e: any) {
       flash("err", `백업 실패: ${e?.message ?? e}`);
-    } finally { setBusy(null); }
-  };
-  const handleExport = async () => {
-    setBusy("export");
-    try {
-      const path = await exportToJson();
-      if (path) flash("ok", `내보내기 완료: ${path}`);
-    } catch (e: any) {
-      flash("err", `내보내기 실패: ${e?.message ?? e}`);
-    } finally { setBusy(null); }
-  };
-  const handleImport = async () => {
-    if (!confirm("가져오기를 진행하면 현재 앱 데이터가 파일 내용으로 완전히 대체됩니다. 진행 직전에 자동 안전망 백업이 한 번 더 생성돼요. 계속할까요?")) return;
-    setBusy("import");
-    try {
-      const result = await importFromJson();
-      if (result) {
-        flash("ok", "가져오기 완료 — 최신 상태를 반영합니다.");
-        onDataChanged();
-        setLastBackupTs(getLastBackupTimestamp());
-      }
-    } catch (e: any) {
-      flash("err", `가져오기 실패: ${e?.message ?? e}`);
     } finally { setBusy(null); }
   };
   const handleUpdateCheck = async () => {
@@ -3330,7 +3290,7 @@ function SettingsSection({
   };
 
   const lastBackupLabel = lastBackupTs
-    ? new Date(lastBackupTs).toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" })
+    ? new Date(lastBackupTs).toLocaleDateString("ko-KR", { dateStyle: "medium" })
     : "없음";
 
   return (
@@ -3404,23 +3364,11 @@ function SettingsSection({
             <div className="text-[11px] text-muted-foreground mb-3">
               하루 1회 자동 백업 (최근 10개 유지) · 마지막 백업: <span className="text-foreground">{lastBackupLabel}</span>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={handleBackupNow}
-                disabled={!!busy}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
-              >{busy === "backup" ? "백업 중…" : "지금 백업"}</button>
-              <button
-                onClick={handleExport}
-                disabled={!!busy}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 disabled:opacity-50"
-              >{busy === "export" ? "내보내는 중…" : "JSON으로 내보내기"}</button>
-              <button
-                onClick={handleImport}
-                disabled={!!busy}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 disabled:opacity-50"
-              >{busy === "import" ? "가져오는 중…" : "JSON에서 가져오기"}</button>
-            </div>
+            <button
+              onClick={handleBackupNow}
+              disabled={!!busy}
+              className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
+            >{busy === "backup" ? "백업 중…" : "지금 백업"}</button>
           </div>
 
           <div className="p-5 rounded-xl border bg-card">
