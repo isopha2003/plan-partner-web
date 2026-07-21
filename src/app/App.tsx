@@ -175,6 +175,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedBlock, setSelectedBlock] = useState<Block | null>(null);
+  // 캘린더 클릭으로 방금 만들어진 블록 id — 상세 패널이 제목 편집 모드로 자동 진입하고,
+  // 이 블록의 제목이 처음 저장될 때 매칭 템플릿을 좌측 사이드바에 자동 추가하는 트리거로 씀.
+  const [justCreatedBlockId, setJustCreatedBlockId] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -406,18 +409,26 @@ export default function App() {
   };
 
   // Optimistic insert: shows instantly with a temp id, then swapped for the real DB row.
-  // select:true는 임시 블록을 곧바로 상세 패널에 띄우고, DB 저장이 끝나면 선택도 실제 id로 스왑함.
-  const addBlock = (block: Block, options?: { select?: boolean }) => {
+  // openInline은 캘린더 클릭으로 만든 이름 없는 블록 — 상세 패널을 곧바로 띄우고 제목 편집에
+  // 포커스를 주며, 나중에 제목이 저장되면 매칭 템플릿까지 자동 생성함(justCreatedBlockId로 추적).
+  // 이 경로에선 낙관적 temp id 없이 DB 저장을 기다렸다가 진짜 id로 시작 — 안 그러면 temp→real
+  // 스왑 시 상세 패널(key={id})이 리마운트되며 사용자가 입력 중이던 제목이 날아감.
+  const addBlock = (block: Block, options?: { select?: boolean; openInline?: boolean }) => {
+    if (options?.select || options?.openInline) {
+      insertBlock(block)
+        .then(real => {
+          setBlocks(bs => [...bs, real]);
+          setSelectedBlock(real);
+          if (options.openInline) setJustCreatedBlockId(real.id);
+        })
+        .catch(console.error);
+      return;
+    }
     const tempId = `temp-${Date.now()}`;
-    const tempBlock = { ...block, id: tempId };
-    setBlocks(bs => [...bs, tempBlock]);
-    if (options?.select) setSelectedBlock(tempBlock);
+    setBlocks(bs => [...bs, { ...block, id: tempId }]);
     insertBlock(block)
-      .then(real => {
-        setBlocks(bs => bs.map(b => (b.id === tempId ? real : b)));
-        if (options?.select) setSelectedBlock(prev => (prev?.id === tempId ? real : prev));
-      })
-      .catch(e => { console.error(e); setBlocks(bs => bs.filter(b => b.id !== tempId)); if (options?.select) setSelectedBlock(prev => prev?.id === tempId ? null : prev); });
+      .then(real => setBlocks(bs => bs.map(b => (b.id === tempId ? real : b))))
+      .catch(e => { console.error(e); setBlocks(bs => bs.filter(b => b.id !== tempId)); });
   };
 
   // Local-only update — used for high-frequency visual feedback (e.g. resize drag) where
@@ -735,6 +746,7 @@ export default function App() {
           <BlockDetailPanel
             key={selectedBlock.id}
             block={selectedBlock}
+            initialEditTitle={selectedBlock.id === justCreatedBlockId}
             childBlocks={blocks.filter(b => b.parentBlockId === selectedBlock.id)}
             templates={templates}
             sameDayBlocks={blocks.filter(b => b.date === selectedBlock.date && !b.parentBlockId && b.id !== selectedBlock.id)}
@@ -751,8 +763,21 @@ export default function App() {
               setSelectedBlock({ ...selectedBlock, memo });
             }}
             onTitleSave={(title) => {
+              const wasJustCreated = selectedBlock.id === justCreatedBlockId;
               updateBlock(selectedBlock.id, { title });
               setSelectedBlock({ ...selectedBlock, title });
+              // 캘린더 클릭으로 방금 만든 블록에 이름이 처음 붙는 순간, 같은 이름/색의
+              // 재사용 템플릿을 사이드바에 자동 추가하고 templateId로 연결. 한 번만 실행.
+              if (wasJustCreated && !selectedBlock.templateId) {
+                createTemplate({ title, color: selectedBlock.color, tags: selectedBlock.tags })
+                  .then(tpl => {
+                    setTemplates(ts => [...ts, tpl]);
+                    updateBlock(selectedBlock.id, { templateId: tpl.id });
+                    setSelectedBlock(prev => (prev && prev.id === selectedBlock.id ? { ...prev, templateId: tpl.id } : prev));
+                  })
+                  .catch(console.error);
+              }
+              if (wasJustCreated) setJustCreatedBlockId(prev => (prev === selectedBlock.id ? null : prev));
             }}
             onSelectChild={setSelectedBlock}
             onToggleChild={toggleBlock}
@@ -1202,7 +1227,7 @@ function CalendarSection({
   onSelect: (b: Block) => void;
   onToggle: (id: string) => void;
   onToggleDeadline: (id: string) => void;
-  onAddBlock: (block: Block, options?: { select?: boolean }) => void;
+  onAddBlock: (block: Block, options?: { select?: boolean; openInline?: boolean }) => void;
   onUpdateBlock: (id: string, changes: Partial<Block>) => void;
   onUpdateBlockLocal: (id: string, changes: Partial<Block>) => void;
   onDeleteBlock: (id: string) => void;
@@ -1233,8 +1258,9 @@ function CalendarSection({
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
   const [dragBlockOffsetMin, setDragBlockOffsetMin] = useState(0); // minutes from block top to mouse
   const [dropTarget, setDropTarget] = useState<{ dayIdx: number; startH: number; startM: number } | null>(null);
-  // 마우스를 그리드에 올렸을 때 클릭하면 새 블록이 놓일 위치를 미리 보여주는 hover ghost
-  const [hoverSlot, setHoverSlot] = useState<{ dayIdx: number; startH: number } | null>(null);
+  // 마우스를 그리드에 올렸을 때 클릭하면 새 블록이 놓일 위치를 미리 보여주는 hover ghost.
+  // 15분 스냅으로 startMin(분 단위)을 저장 — 정시 스냅은 UX 요청으로 해제됨.
+  const [hoverSlot, setHoverSlot] = useState<{ dayIdx: number; startMin: number } | null>(null);
   const [resizing, setResizing] = useState<{
     blockId: string; edge: "top" | "bottom";
     startY: number; origStartMin: number; origEndMin: number; blockDate: string;
@@ -1419,17 +1445,17 @@ function CalendarSection({
                   if (resizing || dragBlockId || dragTplId || justResizedRef.current) return;
                   const rect = e.currentTarget.getBoundingClientRect();
                   const durMin = 60;
-                  // 정시(00분)에 스냅 — 사용자가 캘린더 직접 생성 시엔 00·01·02시 같은 딱 떨어지는 시각을 원함
-                  const clickedHour = Math.max(0, Math.min(TOTAL_H - 1, Math.floor((e.clientY - rect.top) / HOUR_H)));
-                  const startMin = clickedHour * 60;
+                  // 15분 스냅 — 클릭한 위치의 분을 15의 배수로 반올림
+                  const rawMin = Math.max(0, Math.round(((e.clientY - rect.top) / HOUR_H) * 60 / 15) * 15);
+                  const startMin = Math.min(TOTAL_H * 60 - durMin, rawMin);
                   const endMin = startMin + durMin;
                   if (hasOverlapForDate(dateStr, startMin, endMin)) return;
                   const newBlock: Block = {
                     id: `b-${Date.now()}`,
                     title: "새 블록",
                     color: "#5AA9E6",
-                    startH: clickedHour,
-                    startM: 0,
+                    startH: Math.floor(startMin / 60),
+                    startM: startMin % 60,
                     endH: Math.floor(endMin / 60),
                     endM: endMin % 60,
                     completed: false,
@@ -1438,13 +1464,13 @@ function CalendarSection({
                     date: dateStr,
                   };
                   setHoverSlot(null);
-                  onAddBlock(newBlock, { select: true });
+                  onAddBlock(newBlock, { openInline: true });
                 }}
                 onMouseMove={e => {
                   if (dragTplId || dragBlockId || resizing) return;
                   const rect = e.currentTarget.getBoundingClientRect();
-                  const hour = Math.max(0, Math.min(TOTAL_H - 1, Math.floor((e.clientY - rect.top) / HOUR_H)));
-                  setHoverSlot(prev => (prev?.dayIdx === di && prev.startH === hour) ? prev : { dayIdx: di, startH: hour });
+                  const rawMin = Math.max(0, Math.min(TOTAL_H * 60 - 15, Math.round(((e.clientY - rect.top) / HOUR_H) * 60 / 15) * 15));
+                  setHoverSlot(prev => (prev?.dayIdx === di && prev.startMin === rawMin) ? prev : { dayIdx: di, startMin: rawMin });
                 }}
                 onMouseLeave={() => setHoverSlot(prev => (prev?.dayIdx === di ? null : prev))}
                 onDragOver={e => {
@@ -1500,21 +1526,23 @@ function CalendarSection({
                   <div key={h} className="absolute w-full border-t border-border/40 pointer-events-none" style={{ top: h * HOUR_H }} />
                 ))}
 
-                {/* Hover ghost — 마우스 올린 정시 슬롯에 새 블록이 놓일 자리 미리보기.
+                {/* Hover ghost — 마우스 올린 15분 스냅 위치에 새 블록이 놓일 자리 미리보기.
                     이미 블록이 있는 시간대나 드래그·리사이즈 중일 땐 숨김. */}
                 {hoverSlot?.dayIdx === di && !isDropTarget && !dragBlockId && !dragTplId && !resizing
-                  && !hasOverlapForDate(dateStr, hoverSlot.startH * 60, hoverSlot.startH * 60 + 60) && (
+                  && !hasOverlapForDate(dateStr, hoverSlot.startMin, hoverSlot.startMin + 60) && (
                   <div
                     className="absolute left-0.5 right-0.5 rounded-lg pointer-events-none z-[6] transition-all bg-primary/5 ring-1 ring-primary/25"
                     style={{
-                      top: hoverSlot.startH * HOUR_H,
+                      top: hoverSlot.startMin / 60 * HOUR_H,
                       height: HOUR_H - 2,
                       boxShadow: "0 6px 16px -6px rgba(90, 169, 230, 0.35), 0 2px 6px -2px rgba(90, 169, 230, 0.25)",
                     }}
                   >
                     <div className="text-[10px] text-primary/70 px-1.5 pt-1 font-medium">+ 새 블록</div>
                     <div className="text-[9px] text-primary/50 px-1.5 mt-0.5">
-                      {fmtTime(hoverSlot.startH, 0)} – {fmtTime(hoverSlot.startH + 1, 0)}
+                      {fmtTime(Math.floor(hoverSlot.startMin / 60), hoverSlot.startMin % 60)}
+                      {" – "}
+                      {fmtTime(Math.floor((hoverSlot.startMin + 60) / 60), (hoverSlot.startMin + 60) % 60)}
                     </div>
                   </div>
                 )}
@@ -3053,13 +3081,14 @@ function SettingsSection({
 
 // ── Block Detail Panel — no timer (v2) ─────────────────────────────
 function BlockDetailPanel({
-  block, childBlocks, templates, sameDayBlocks, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave, onTitleSave,
+  block, childBlocks, templates, sameDayBlocks, initialEditTitle, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave, onTitleSave,
   onSelectChild, onToggleChild, onAddTimeblockChild, onGoToParent, onSetNextBlock,
 }: {
   block: Block;
   childBlocks: Block[];
   templates: Template[];
   sameDayBlocks: Block[];
+  initialEditTitle?: boolean;
   onClose: () => void;
   onToggle: () => void;
   onDelete: () => void;
@@ -3074,9 +3103,10 @@ function BlockDetailPanel({
   onSetNextBlock: (nextBlockId: string | null) => void;
 }) {
   const [memo, setMemo] = useState(block.memo);
-  // 헤더의 제목 인라인 편집 — 캘린더 직접 생성 블록도 여기서 이름을 붙일 수 있음.
+  // 헤더의 제목 인라인 편집 — 캘린더 직접 생성 블록은 initialEditTitle=true로 넘어와서
+  // 패널이 뜨자마자 편집 모드로 진입하고 input에 포커스가 잡힘.
   // Enter/blur로 저장, Esc로 취소. 빈 문자열은 무시하고 원래 제목 유지.
-  const [editingTitle, setEditingTitle] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(!!initialEditTitle);
   const [titleDraft, setTitleDraft] = useState(block.title);
   const commitTitle = () => {
     const trimmed = titleDraft.trim();
@@ -3164,6 +3194,7 @@ function BlockDetailPanel({
             autoFocus
             value={titleDraft}
             onChange={e => setTitleDraft(e.target.value)}
+            onFocus={e => e.currentTarget.select()}
             onBlur={commitTitle}
             onKeyDown={e => {
               if (e.key === "Enter") { e.preventDefault(); commitTitle(); }
