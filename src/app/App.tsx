@@ -405,13 +405,19 @@ export default function App() {
     patchBlock(id, { completed }).catch(console.error);
   };
 
-  // Optimistic insert: shows instantly with a temp id, then swapped for the real DB row
-  const addBlock = (block: Block) => {
+  // Optimistic insert: shows instantly with a temp id, then swapped for the real DB row.
+  // select:true는 임시 블록을 곧바로 상세 패널에 띄우고, DB 저장이 끝나면 선택도 실제 id로 스왑함.
+  const addBlock = (block: Block, options?: { select?: boolean }) => {
     const tempId = `temp-${Date.now()}`;
-    setBlocks(bs => [...bs, { ...block, id: tempId }]);
+    const tempBlock = { ...block, id: tempId };
+    setBlocks(bs => [...bs, tempBlock]);
+    if (options?.select) setSelectedBlock(tempBlock);
     insertBlock(block)
-      .then(real => setBlocks(bs => bs.map(b => (b.id === tempId ? real : b))))
-      .catch(e => { console.error(e); setBlocks(bs => bs.filter(b => b.id !== tempId)); });
+      .then(real => {
+        setBlocks(bs => bs.map(b => (b.id === tempId ? real : b)));
+        if (options?.select) setSelectedBlock(prev => (prev?.id === tempId ? real : prev));
+      })
+      .catch(e => { console.error(e); setBlocks(bs => bs.filter(b => b.id !== tempId)); if (options?.select) setSelectedBlock(prev => prev?.id === tempId ? null : prev); });
   };
 
   // Local-only update — used for high-frequency visual feedback (e.g. resize drag) where
@@ -1195,7 +1201,7 @@ function CalendarSection({
   onSelect: (b: Block) => void;
   onToggle: (id: string) => void;
   onToggleDeadline: (id: string) => void;
-  onAddBlock: (block: Block) => void;
+  onAddBlock: (block: Block, options?: { select?: boolean }) => void;
   onUpdateBlock: (id: string, changes: Partial<Block>) => void;
   onUpdateBlockLocal: (id: string, changes: Partial<Block>) => void;
   onDeleteBlock: (id: string) => void;
@@ -1406,6 +1412,29 @@ function CalendarSection({
                 key={di}
                 className={`flex-1 relative border-l border-border min-w-0 ${isToday ? "bg-sky-50/10" : ""}`}
                 style={{ height: TOTAL_H * HOUR_H }}
+                onClick={e => {
+                  if (resizing || dragBlockId || dragTplId || justResizedRef.current) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const durMin = 60;
+                  const rawMin = Math.max(0, Math.round(((e.clientY - rect.top) / HOUR_H) * 60 / 15) * 15);
+                  const startMin = Math.min(TOTAL_H * 60 - durMin, rawMin);
+                  const endMin = startMin + durMin;
+                  if (hasOverlapForDate(dateStr, startMin, endMin)) return;
+                  const newBlock: Block = {
+                    id: `b-${Date.now()}`,
+                    title: "새 블록",
+                    color: "#5AA9E6",
+                    startH: Math.floor(startMin / 60),
+                    startM: startMin % 60,
+                    endH: Math.floor(endMin / 60),
+                    endM: endMin % 60,
+                    completed: false,
+                    tags: [],
+                    memo: "",
+                    date: dateStr,
+                  };
+                  onAddBlock(newBlock, { select: true });
+                }}
                 onDragOver={e => {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = dragBlockId ? "move" : "copy";
@@ -1456,7 +1485,7 @@ function CalendarSection({
                 }}
               >
                 {Array.from({ length: TOTAL_H }, (_, h) => (
-                  <div key={h} className="absolute w-full border-t border-border/40" style={{ top: h * HOUR_H }} />
+                  <div key={h} className="absolute w-full border-t border-border/40 pointer-events-none" style={{ top: h * HOUR_H }} />
                 ))}
 
                 {/* Drop ghost — template or block move */}
@@ -1529,7 +1558,7 @@ function CalendarSection({
                       onDragEnd={() => { setDragBlockId(null); setDropTarget(null); }}
                       className={`absolute left-0.5 right-0.5 rounded-lg overflow-hidden z-10 select-none group/block ${resizing?.blockId !== block.id && !isBeingDragged ? "cursor-grab hover:brightness-95" : ""} ${isBeingDragged ? "opacity-30" : ""}`}
                       style={{ top, height, backgroundColor: block.color + "28", borderLeft: `3px solid ${block.color}`, opacity: block.completed ? 0.45 : isBeingDragged ? 0.3 : 1 }}
-                      onClick={() => !resizing && !dragBlockId && !justResizedRef.current && onSelect(block)}
+                      onClick={e => { if (resizing || dragBlockId || justResizedRef.current) return; e.stopPropagation(); onSelect(block); }}
                     >
                       <div className="absolute top-0 left-0 right-0 h-2.5 cursor-n-resize z-20"
                         onMouseDown={e => { e.stopPropagation(); e.preventDefault();
