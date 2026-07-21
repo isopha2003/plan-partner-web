@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   CheckCircle2, Circle, Clock, Play, Pause,
   Plus, X, ChevronLeft, ChevronRight, List, Grid3x3,
-  BarChart2, Settings, Calendar, Target, Flame,
+  BarChart2, Settings, Calendar, Target, Flame, FileText,
   Edit3, Check, AlertCircle, Info, PictureInPicture2 as PictureInPicture,
+  Folder, FolderPlus, MoreVertical, ArrowLeft, ArrowUpDown, Trash2,
 } from "lucide-react";
 import {
   fetchTemplates, createTemplate, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
@@ -12,7 +13,12 @@ import {
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
   fetchTodaySessions, startTimerSession, endTimerSession, deleteTodaySessions, fetchFocusSecByDate,
   fetchChecklistItems, createChecklistItem, toggleChecklistItemRow, deleteChecklistItemRow,
+  fetchNotes, createNote, updateNote, deleteNote, moveNoteToFolder, reorderNotes,
+  fetchNoteFolders, createFolder, updateFolder, deleteFolder,
+  type Note, type NoteFolder,
 } from "../lib/api";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { type TimerState, fmtSec } from "../lib/timer";
 import { emit, listen } from "@tauri-apps/api/event";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
@@ -83,7 +89,7 @@ interface ChecklistItemT {
   sortOrder: number;
 }
 
-type Section = "today" | "calendar" | "deadlines" | "grass" | "settings";
+type Section = "today" | "calendar" | "deadlines" | "grass" | "memo" | "settings";
 
 // ── Helpers ────────────────────────────────────────────────────────
 // Local calendar date -> "YYYY-MM-DD", WITHOUT going through UTC (unlike .toISOString().slice(0,10),
@@ -563,6 +569,7 @@ export default function App() {
     { id: "calendar", label: "캘린더", Icon: Calendar },
     { id: "deadlines", label: "마감 작업", Icon: Target },
     { id: "grass", label: "활동 기록 & 통계", Icon: BarChart2 },
+    { id: "memo", label: "메모", Icon: FileText },
     { id: "settings", label: "설정", Icon: Settings },
   ];
 
@@ -693,6 +700,7 @@ export default function App() {
               focusSecByDate={focusSecByDate}
             />
           )}
+          {section === "memo" && <MemoSection />}
           {section === "settings" && (
             <SettingsSection
               pomodoroOn={pomodoroOn} setPomodoroOn={setPomodoroOn}
@@ -2275,6 +2283,511 @@ function GrassSection({
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Memo Section — 메모장 (리스트 · 폴더 · 카테고리 · 정렬 · 드래그) ─────
+type SortMode = "custom" | "title-asc" | "title-desc" | "date-asc" | "date-desc";
+const SORT_LABELS: Record<SortMode, string> = {
+  "custom": "사용자 지정순",
+  "title-asc": "제목 ↑",
+  "title-desc": "제목 ↓",
+  "date-asc": "날짜 ↑ (오래된순)",
+  "date-desc": "날짜 ↓ (최신순)",
+};
+// 폴더 색상 팔레트
+const FOLDER_COLORS = ["#6B9B37", "#5B7EA8", "#7B5EA7", "#D4622A", "#8B6E4E", "#4E8B6E", "#C89A2E", "#B05A7A"];
+
+// 마크다운 프리뷰 공용 클래스
+const PROSE_CLASS = "prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-p:my-2 prose-li:my-1 prose-code:before:hidden prose-code:after:hidden prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-a:text-primary";
+
+function MemoSection() {
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [folders, setFolders] = useState<NoteFolder[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null); // null이면 리스트 뷰
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [ns, fs] = await Promise.all([fetchNotes(), fetchNoteFolders()]);
+        setNotes(ns);
+        setFolders(fs);
+      } catch (e) { console.error(e); }
+      setLoaded(true);
+    })();
+  }, []);
+
+  const refreshNotes = async () => { try { setNotes(await fetchNotes()); } catch (e) { console.error(e); } };
+  const refreshFolders = async () => { try { setFolders(await fetchNoteFolders()); } catch (e) { console.error(e); } };
+
+  const handleCreateNote = async () => {
+    try {
+      const n = await createNote({ title: "", content: "" });
+      setNotes(ns => [n, ...ns]);
+      setEditingId(n.id);
+    } catch (e) { console.error(e); }
+  };
+
+  if (!loaded) {
+    return <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">불러오는 중…</div>;
+  }
+
+  const editingNote = notes.find(n => n.id === editingId) ?? null;
+  if (editingNote) {
+    return (
+      <NoteEditor
+        note={editingNote}
+        folders={folders}
+        allCategories={Array.from(new Set(notes.map(n => n.category).filter(Boolean)))}
+        onBack={() => { setEditingId(null); refreshNotes(); }}
+        onChangeLocal={patch => setNotes(ns => ns.map(x => x.id === editingNote.id ? { ...x, ...patch } : x))}
+      />
+    );
+  }
+
+  return (
+    <NoteList
+      notes={notes}
+      folders={folders}
+      onOpen={id => setEditingId(id)}
+      onCreateNote={handleCreateNote}
+      refreshNotes={refreshNotes}
+      refreshFolders={refreshFolders}
+      setNotes={setNotes}
+    />
+  );
+}
+
+// ── 메모 리스트 뷰 ──────────────────────────────────────────────────
+function NoteList({
+  notes, folders, onOpen, onCreateNote, refreshNotes, refreshFolders, setNotes,
+}: {
+  notes: Note[];
+  folders: NoteFolder[];
+  onOpen: (id: string) => void;
+  onCreateNote: () => void;
+  refreshNotes: () => Promise<void>;
+  refreshFolders: () => Promise<void>;
+  setNotes: React.Dispatch<React.SetStateAction<Note[]>>;
+}) {
+  const [sortMode, setSortMode] = useState<SortMode>("custom");
+  const [sortOpen, setSortOpen] = useState(false);
+  const [activeFolderId, setActiveFolderId] = useState<string | null | "all">("all");
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [menuNoteId, setMenuNoteId] = useState<string | null>(null);
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [newFolderColor, setNewFolderColor] = useState(FOLDER_COLORS[0]);
+  const [dropFolderId, setDropFolderId] = useState<string | null | "root">(null); // 드래그 오버 중인 폴더
+  const [dragNoteId, setDragNoteId] = useState<string | null>(null);
+
+  const categories = Array.from(new Set(notes.map(n => n.category).filter(Boolean)));
+
+  // 필터
+  let shown = notes.filter(n => {
+    if (activeFolderId === "all") { /* 전체 */ }
+    else if (activeFolderId === null) { if (n.folderId !== null) return false; }
+    else if (n.folderId !== activeFolderId) return false;
+    if (activeCategory && n.category !== activeCategory) return false;
+    return true;
+  });
+  // 정렬
+  shown = [...shown].sort((a, b) => {
+    switch (sortMode) {
+      case "title-asc": return (a.title || "제목 없음").localeCompare(b.title || "제목 없음");
+      case "title-desc": return (b.title || "제목 없음").localeCompare(a.title || "제목 없음");
+      case "date-asc": return a.updatedAt.localeCompare(b.updatedAt);
+      case "date-desc": return b.updatedAt.localeCompare(a.updatedAt);
+      default: return a.sortOrder - b.sortOrder;
+    }
+  });
+
+  const handleMoveNote = async (noteId: string, folderId: string | null) => {
+    setNotes(ns => ns.map(n => n.id === noteId ? { ...n, folderId } : n));
+    try { await moveNoteToFolder(noteId, folderId); } catch (e) { console.error(e); }
+    setMenuNoteId(null);
+  };
+
+  const handleDeleteNote = async (noteId: string) => {
+    setNotes(ns => ns.filter(n => n.id !== noteId));
+    try { await deleteNote(noteId); } catch (e) { console.error(e); }
+    setMenuNoteId(null);
+  };
+
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    try { await createFolder({ name, color: newFolderColor }); await refreshFolders(); } catch (e) { console.error(e); }
+    setNewFolderName(""); setNewFolderColor(FOLDER_COLORS[0]); setShowNewFolder(false);
+  };
+
+  const handleDeleteFolder = async (folderId: string) => {
+    if (activeFolderId === folderId) setActiveFolderId("all");
+    try { await deleteFolder(folderId); await Promise.all([refreshFolders(), refreshNotes()]); } catch (e) { console.error(e); }
+  };
+
+  // 노트 카드 간 드래그로 재정렬 — 정렬 모드가 custom이 아니면 custom으로 전환
+  const handleReorder = async (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return;
+    const ids = shown.map(n => n.id);
+    const from = ids.indexOf(draggedId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    // shown에 없는(다른 폴더/카테고리) 노트는 뒤에 유지
+    const rest = notes.map(n => n.id).filter(id => !ids.includes(id));
+    const finalOrder = [...ids, ...rest];
+    setSortMode("custom");
+    setNotes(ns => [...ns].sort((a, b) => finalOrder.indexOf(a.id) - finalOrder.indexOf(b.id)).map((n, i) => ({ ...n, sortOrder: i })));
+    try { await reorderNotes(finalOrder); } catch (e) { console.error(e); }
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto" onClick={() => setMenuNoteId(null)}>
+      <div className="max-w-4xl mx-auto px-8 py-8">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-3xl font-medium">메모</h2>
+          <div className="flex items-center gap-2">
+            {/* 정렬 드롭다운 */}
+            <div className="relative">
+              <button
+                onClick={e => { e.stopPropagation(); setSortOpen(v => !v); }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-card text-xs hover:bg-muted transition-colors"
+              >
+                <ArrowUpDown size={13} /> {SORT_LABELS[sortMode]}
+              </button>
+              {sortOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setSortOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1 w-44 bg-card border border-border rounded-lg shadow-lg z-50 p-1">
+                    {(Object.keys(SORT_LABELS) as SortMode[]).map(m => (
+                      <button
+                        key={m}
+                        onClick={() => { setSortMode(m); setSortOpen(false); }}
+                        className={`w-full text-left text-xs px-2.5 py-1.5 rounded-md hover:bg-muted transition-colors ${sortMode === m ? "text-primary font-medium" : "text-foreground"}`}
+                      >
+                        {SORT_LABELS[m]}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            <button
+              onClick={() => setShowNewFolder(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-card text-xs hover:bg-muted transition-colors"
+            >
+              <FolderPlus size={13} /> 새 폴더
+            </button>
+            <button
+              onClick={onCreateNote}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity"
+            >
+              <Plus size={13} /> 새 메모
+            </button>
+          </div>
+        </div>
+
+        {/* 새 폴더 인라인 폼 */}
+        {showNewFolder && (
+          <div className="mb-4 p-4 rounded-xl border bg-card">
+            <div className="flex items-center gap-2 mb-3">
+              <input
+                autoFocus
+                value={newFolderName}
+                onChange={e => setNewFolderName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleCreateFolder(); if (e.key === "Escape") setShowNewFolder(false); }}
+                placeholder="폴더 이름"
+                className="flex-1 px-3 py-2 rounded-lg bg-muted text-sm outline-none focus:ring-2 focus:ring-inset focus:ring-ring"
+              />
+              <button onClick={handleCreateFolder} className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium">만들기</button>
+              <button onClick={() => setShowNewFolder(false)} className="p-2 text-muted-foreground hover:text-foreground"><X size={14} /></button>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {FOLDER_COLORS.map(c => (
+                <button
+                  key={c}
+                  onClick={() => setNewFolderColor(c)}
+                  className={`size-6 rounded-full transition-transform ${newFolderColor === c ? "ring-2 ring-offset-2 ring-offset-card ring-foreground/40 scale-110" : ""}`}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 폴더 필터 바 (드롭 타깃) */}
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <FolderChip
+            label="전체" count={notes.length} active={activeFolderId === "all"}
+            onClick={() => setActiveFolderId("all")}
+          />
+          <FolderChip
+            label="폴더 없음" count={notes.filter(n => !n.folderId).length}
+            active={activeFolderId === null}
+            isDropTarget={dropFolderId === "root"}
+            onClick={() => setActiveFolderId(null)}
+            onDragOver={e => { e.preventDefault(); setDropFolderId("root"); }}
+            onDragLeave={() => setDropFolderId(null)}
+            onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData("noteId"); if (id) handleMoveNote(id, null); setDropFolderId(null); }}
+          />
+          {folders.map(f => (
+            <FolderChip
+              key={f.id}
+              label={f.name} color={f.color}
+              count={notes.filter(n => n.folderId === f.id).length}
+              active={activeFolderId === f.id}
+              isDropTarget={dropFolderId === f.id}
+              onClick={() => setActiveFolderId(f.id)}
+              onDelete={() => handleDeleteFolder(f.id)}
+              onDragOver={e => { e.preventDefault(); setDropFolderId(f.id); }}
+              onDragLeave={() => setDropFolderId(null)}
+              onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData("noteId"); if (id) handleMoveNote(id, f.id); setDropFolderId(null); }}
+            />
+          ))}
+        </div>
+
+        {/* 카테고리 필터 칩 */}
+        {categories.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 mb-5">
+            <span className="text-[10px] text-muted-foreground mr-1">카테고리</span>
+            <button
+              onClick={() => setActiveCategory(null)}
+              className={`text-[11px] px-2 py-0.5 rounded-full transition-colors ${activeCategory === null ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground hover:text-foreground"}`}
+            >전체</button>
+            {categories.map(c => (
+              <button
+                key={c}
+                onClick={() => setActiveCategory(activeCategory === c ? null : c)}
+                className={`text-[11px] px-2 py-0.5 rounded-full transition-colors ${activeCategory === c ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground hover:text-foreground"}`}
+              >{c}</button>
+            ))}
+          </div>
+        )}
+
+        {/* 노트 목록 */}
+        {shown.length === 0 ? (
+          <div className="text-center py-16 text-sm text-muted-foreground">
+            {notes.length === 0 ? "아직 메모가 없어요. \"새 메모\"로 첫 메모를 만들어보세요." : "이 조건에 해당하는 메모가 없어요."}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {shown.map(n => (
+              <NoteCard
+                key={n.id}
+                note={n}
+                folder={folders.find(f => f.id === n.folderId) ?? null}
+                menuOpen={menuNoteId === n.id}
+                folders={folders}
+                onOpen={() => onOpen(n.id)}
+                onToggleMenu={e => { e.stopPropagation(); setMenuNoteId(menuNoteId === n.id ? null : n.id); }}
+                onMove={folderId => handleMoveNote(n.id, folderId)}
+                onDelete={() => handleDeleteNote(n.id)}
+                onDragStart={e => { e.dataTransfer.setData("noteId", n.id); setDragNoteId(n.id); }}
+                onDragEnd={() => setDragNoteId(null)}
+                onDragOverCard={e => { if (dragNoteId && dragNoteId !== n.id) e.preventDefault(); }}
+                onDropCard={e => { e.preventDefault(); const id = e.dataTransfer.getData("noteId"); if (id) handleReorder(id, n.id); setDragNoteId(null); }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FolderChip({
+  label, count, color, active, isDropTarget, onClick, onDelete, onDragOver, onDragLeave, onDrop,
+}: {
+  label: string; count: number; color?: string;
+  active: boolean; isDropTarget?: boolean;
+  onClick: () => void; onDelete?: () => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDragLeave?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+}) {
+  return (
+    <div
+      onClick={onClick}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={`group/chip flex items-center gap-1.5 pl-2.5 pr-2 py-1.5 rounded-lg border text-xs cursor-pointer transition-all ${
+        isDropTarget ? "border-primary bg-primary/10 ring-1 ring-primary" :
+        active ? "border-primary/50 bg-primary/5 text-foreground" : "border-border bg-card text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {color ? <span className="size-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} /> : <Folder size={12} />}
+      <span className="font-medium">{label}</span>
+      <span className="text-[10px] opacity-60">{count}</span>
+      {onDelete && (
+        <button
+          onClick={e => { e.stopPropagation(); if (confirm(`폴더 "${label}"을(를) 삭제할까요? 안의 메모는 폴더 없음으로 이동해요.`)) onDelete(); }}
+          className="opacity-0 group-hover/chip:opacity-100 transition-opacity text-muted-foreground hover:text-destructive ml-0.5"
+        ><X size={11} /></button>
+      )}
+    </div>
+  );
+}
+
+function NoteCard({
+  note, folder, folders, menuOpen, onOpen, onToggleMenu, onMove, onDelete,
+  onDragStart, onDragEnd, onDragOverCard, onDropCard,
+}: {
+  note: Note; folder: NoteFolder | null; folders: NoteFolder[]; menuOpen: boolean;
+  onOpen: () => void; onToggleMenu: (e: React.MouseEvent) => void;
+  onMove: (folderId: string | null) => void; onDelete: () => void;
+  onDragStart: (e: React.DragEvent) => void; onDragEnd: (e: React.DragEvent) => void;
+  onDragOverCard: (e: React.DragEvent) => void; onDropCard: (e: React.DragEvent) => void;
+}) {
+  const preview = note.content.replace(/[#*`_>\-\[\]]/g, "").replace(/\n+/g, " ").trim();
+  const dateStr = note.updatedAt ? note.updatedAt.slice(0, 10) : "";
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOverCard}
+      onDrop={onDropCard}
+      onClick={onOpen}
+      className="group/note relative flex items-start gap-3 p-4 rounded-xl border bg-card hover:border-primary/40 hover:shadow-sm transition-all cursor-pointer"
+    >
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium truncate">{note.title.trim() || "제목 없음"}</span>
+          {note.category && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground flex-shrink-0">{note.category}</span>}
+        </div>
+        {preview && <p className="text-[11px] text-muted-foreground mt-1 line-clamp-1">{preview}</p>}
+        <div className="flex items-center gap-2 mt-1.5 text-[10px] text-muted-foreground">
+          {folder && <span className="flex items-center gap-1"><span className="size-2 rounded-full" style={{ backgroundColor: folder.color }} />{folder.name}</span>}
+          <span>{dateStr}</span>
+        </div>
+      </div>
+
+      {/* 3-dot 메뉴 — 카드 전체 높이 기준 세로 중앙 */}
+      <div className="relative flex-shrink-0 self-stretch flex items-center" onClick={e => e.stopPropagation()}>
+        <button
+          onClick={onToggleMenu}
+          className="p-1 rounded-md text-muted-foreground hover:bg-muted opacity-0 group-hover/note:opacity-100 transition-opacity"
+        ><MoreVertical size={15} /></button>
+        {menuOpen && (
+          <div className="absolute right-0 top-full mt-1 w-40 bg-card border border-border rounded-lg shadow-lg z-50 p-1">
+            <div className="text-[10px] text-muted-foreground px-2.5 py-1">폴더로 이동</div>
+            <button
+              onClick={() => onMove(null)}
+              className={`w-full text-left text-xs px-2.5 py-1.5 rounded-md hover:bg-muted transition-colors flex items-center gap-2 ${!note.folderId ? "text-primary" : ""}`}
+            ><Folder size={12} /> 폴더 없음</button>
+            {folders.map(f => (
+              <button
+                key={f.id}
+                onClick={() => onMove(f.id)}
+                className={`w-full text-left text-xs px-2.5 py-1.5 rounded-md hover:bg-muted transition-colors flex items-center gap-2 ${note.folderId === f.id ? "text-primary" : ""}`}
+              ><span className="size-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: f.color }} /> {f.name}</button>
+            ))}
+            <div className="h-px bg-border my-1" />
+            <button
+              onClick={onDelete}
+              className="w-full text-left text-xs px-2.5 py-1.5 rounded-md hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-2"
+            ><Trash2 size={12} /> 삭제</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 메모 편집기 뷰 (생성·수정 공용) ─────────────────────────────────
+function NoteEditor({
+  note, folders, allCategories, onBack, onChangeLocal,
+}: {
+  note: Note;
+  folders: NoteFolder[];
+  allCategories: string[];
+  onBack: () => void;
+  onChangeLocal: (patch: Partial<Note>) => void;
+}) {
+  const [title, setTitle] = useState(note.title);
+  const [content, setContent] = useState(note.content);
+  const [category, setCategory] = useState(note.category);
+  const [folderId, setFolderId] = useState<string | null>(note.folderId);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("saved");
+  const first = useRef(true);
+
+  // 700ms debounce 자동 저장
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    setSaveState("saving");
+    const t = setTimeout(async () => {
+      try {
+        await updateNote(note.id, { title, content, category, folderId });
+        onChangeLocal({ title, content, category, folderId });
+        setSaveState("saved");
+      } catch (e) { console.error(e); setSaveState("idle"); }
+    }, 700);
+    return () => clearTimeout(t);
+  }, [title, content, category, folderId]);
+
+  return (
+    <div className="flex-1 overflow-hidden flex flex-col">
+      {/* 상단 바 */}
+      <div className="flex items-center gap-3 px-8 pt-8 pb-3 flex-shrink-0">
+        <button onClick={onBack} className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors" title="목록으로">
+          <ArrowLeft size={18} />
+        </button>
+        <input
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          placeholder="제목 없음"
+          className="flex-1 text-2xl font-medium bg-transparent outline-none placeholder:text-muted-foreground/50"
+        />
+        <span className="text-[11px] text-muted-foreground flex-shrink-0">
+          {saveState === "saving" ? "저장 중…" : saveState === "saved" ? "저장됨" : ""}
+        </span>
+      </div>
+
+      {/* 메타: 카테고리 + 폴더 */}
+      <div className="flex items-center gap-3 px-8 pb-3 flex-shrink-0">
+        <input
+          list="note-categories"
+          value={category}
+          onChange={e => setCategory(e.target.value)}
+          placeholder="카테고리"
+          className="px-3 py-1.5 rounded-lg bg-muted text-xs outline-none focus:ring-2 focus:ring-inset focus:ring-ring w-40"
+        />
+        <datalist id="note-categories">
+          {allCategories.map(c => <option key={c} value={c} />)}
+        </datalist>
+        <select
+          value={folderId ?? ""}
+          onChange={e => setFolderId(e.target.value || null)}
+          className="px-3 py-1.5 rounded-lg bg-muted text-xs outline-none focus:ring-2 focus:ring-inset focus:ring-ring"
+        >
+          <option value="">폴더 없음</option>
+          {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+      </div>
+
+      {/* 편집 + 프리뷰 */}
+      <div className="flex-1 overflow-hidden grid grid-cols-2 gap-4 px-8 pb-8 min-h-0">
+        <textarea
+          value={content}
+          onChange={e => setContent(e.target.value)}
+          placeholder="여기에 마크다운으로 자유롭게 적어보세요.&#10;&#10;# 제목&#10;- 목록&#10;- [ ] 체크박스&#10;**굵게**, *기울임*, `code`"
+          className="w-full h-full resize-none rounded-xl border bg-card p-4 text-sm outline-none focus:ring-2 focus:ring-inset focus:ring-ring leading-relaxed"
+          spellCheck={false}
+          autoFocus
+        />
+        <div className={`w-full h-full overflow-y-auto rounded-xl border bg-card p-4 ${PROSE_CLASS}`}>
+          {content.trim() ? (
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          ) : (
+            <p className="text-muted-foreground text-sm italic">미리보기가 여기에 표시돼요</p>
+          )}
+        </div>
       </div>
     </div>
   );

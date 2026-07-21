@@ -73,12 +73,46 @@ CREATE TABLE IF NOT EXISTS timer_sessions (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 메모 폴더 — 색상 있는 보관 통. 메모가 folder_id로 소속됨(0~1개, 플랫 1단계).
+CREATE TABLE IF NOT EXISTS note_folders (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 자유 메모 — 제목 + 마크다운 내용 + 자유 텍스트 카테고리 + 소속 폴더.
+-- sort_order로 사용자 지정 순서 저장(정렬 모드가 custom일 때 사용).
+CREATE TABLE IF NOT EXISTS notes (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT '',
+  folder_id TEXT REFERENCES note_folders(id) ON DELETE SET NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS blocks_date_idx ON blocks (date);
 CREATE INDEX IF NOT EXISTS blocks_parent_idx ON blocks (parent_block_id);
 CREATE INDEX IF NOT EXISTS checklist_items_block_idx ON checklist_items (block_id);
 CREATE INDEX IF NOT EXISTS deadlines_due_date_idx ON deadlines (due_date);
 CREATE INDEX IF NOT EXISTS timer_sessions_date_idx ON timer_sessions (date);
+CREATE INDEX IF NOT EXISTS notes_folder_idx ON notes (folder_id);
 `;
+
+// 이미 구버전 notes 테이블(단일 main 노트, id/content/updated_at만)이 있던 설치를 위한
+// 방어적 컬럼 추가. 각 ALTER는 컬럼이 이미 있으면 에러가 나므로 개별 try/catch로 무시.
+// created_at은 ALTER 시 non-constant default(datetime('now'))를 못 붙이므로 nullable로 추가.
+const NOTE_UPGRADES = [
+  "ALTER TABLE notes ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE notes ADD COLUMN category TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE notes ADD COLUMN folder_id TEXT",
+  "ALTER TABLE notes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE notes ADD COLUMN created_at TEXT",
+];
 
 let dbPromise: Promise<Database> | null = null;
 
@@ -88,6 +122,17 @@ export function getDb(): Promise<Database> {
   if (!dbPromise) {
     dbPromise = (async () => {
       const db = await Database.load("sqlite:planner.db");
+      // 1) 구버전 notes 테이블이 있으면 먼저 컬럼 업그레이드. SCHEMA의 CREATE INDEX가
+      //    notes(folder_id)를 참조하므로, 인덱스 생성 전에 folder_id가 있어야 함.
+      //    새 DB면 notes 테이블이 아직 없어 각 ALTER가 조용히 실패(무시)하고,
+      //    이후 SCHEMA의 CREATE TABLE이 전체 컬럼을 갖춘 채 만든다.
+      for (const stmt of NOTE_UPGRADES) {
+        try { await db.execute(stmt); } catch { /* column/table already exists or not yet created */ }
+      }
+      try {
+        await db.execute("UPDATE notes SET created_at = updated_at WHERE created_at IS NULL");
+      } catch { /* fresh install: notes 아직 없음 */ }
+      // 2) 테이블/인덱스 생성 (IF NOT EXISTS이라 재실행 안전)
       for (const stmt of SCHEMA.split(";").map(s => s.trim()).filter(Boolean)) {
         await db.execute(stmt);
       }

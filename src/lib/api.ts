@@ -288,6 +288,130 @@ export async function fetchFocusSecByDate(): Promise<Record<string, number>> {
   return out;
 }
 
+// ── notes (자유 메모) ─────────────────────────────────────────────
+export interface Note {
+  id: string;
+  title: string;
+  content: string;
+  category: string;
+  folderId: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function rowToNote(r: any): Note {
+  return {
+    id: r.id,
+    title: r.title ?? "",
+    content: r.content ?? "",
+    category: r.category ?? "",
+    folderId: r.folder_id ?? null,
+    sortOrder: r.sort_order ?? 0,
+    createdAt: r.created_at ?? r.updated_at ?? "",
+    updatedAt: r.updated_at ?? "",
+  };
+}
+
+export async function fetchNotes(): Promise<Note[]> {
+  const db = await getDb();
+  const rows = await db.select<any[]>("SELECT * FROM notes ORDER BY sort_order, updated_at DESC");
+  return rows.map(rowToNote);
+}
+
+export async function createNote(n: { title?: string; content?: string; category?: string; folderId?: string | null }): Promise<Note> {
+  const db = await getDb();
+  const id = uuid();
+  const now = new Date().toISOString();
+  // 새 노트는 맨 앞(sort_order 최소값 - 1)에 놓아 리스트 상단에 뜨게 함
+  const rows = await db.select<any[]>("SELECT MIN(sort_order) AS m FROM notes");
+  const sortOrder = (rows[0]?.m ?? 0) - 1;
+  await db.execute(
+    `INSERT INTO notes (id, title, content, category, folder_id, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, n.title ?? "", n.content ?? "", n.category ?? "", n.folderId ?? null, sortOrder, now, now]
+  );
+  return { id, title: n.title ?? "", content: n.content ?? "", category: n.category ?? "", folderId: n.folderId ?? null, sortOrder, createdAt: now, updatedAt: now };
+}
+
+export async function updateNote(id: string, changes: { title?: string; content?: string; category?: string; folderId?: string | null }): Promise<void> {
+  const db = await getDb();
+  const sets: string[] = [];
+  const vals: any[] = [];
+  const push = (col: string, v: any) => { sets.push(`${col} = ?`); vals.push(v); };
+  if (changes.title !== undefined) push("title", changes.title);
+  if (changes.content !== undefined) push("content", changes.content);
+  if (changes.category !== undefined) push("category", changes.category);
+  if (changes.folderId !== undefined) push("folder_id", changes.folderId ?? null);
+  push("updated_at", new Date().toISOString());
+  vals.push(id);
+  await db.execute(`UPDATE notes SET ${sets.join(", ")} WHERE id = ?`, vals);
+}
+
+export async function deleteNote(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM notes WHERE id = ?", [id]);
+}
+
+export async function moveNoteToFolder(id: string, folderId: string | null): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE notes SET folder_id = ?, updated_at = ? WHERE id = ?",
+    [folderId, new Date().toISOString(), id]
+  );
+}
+
+// 사용자 지정 순서 저장 — orderedIds의 인덱스를 그대로 sort_order로 부여
+export async function reorderNotes(orderedIds: string[]): Promise<void> {
+  const db = await getDb();
+  for (let i = 0; i < orderedIds.length; i++) {
+    await db.execute("UPDATE notes SET sort_order = ? WHERE id = ?", [i, orderedIds[i]]);
+  }
+}
+
+// ── note_folders (메모 폴더) ──────────────────────────────────────
+export interface NoteFolder {
+  id: string;
+  name: string;
+  color: string;
+  sortOrder: number;
+}
+
+export async function fetchNoteFolders(): Promise<NoteFolder[]> {
+  const db = await getDb();
+  const rows = await db.select<any[]>("SELECT * FROM note_folders ORDER BY sort_order, created_at");
+  return rows.map(r => ({ id: r.id, name: r.name, color: r.color, sortOrder: r.sort_order ?? 0 }));
+}
+
+export async function createFolder(f: { name: string; color: string }): Promise<NoteFolder> {
+  const db = await getDb();
+  const id = uuid();
+  const rows = await db.select<any[]>("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM note_folders");
+  const sortOrder = rows[0]?.n ?? 0;
+  await db.execute(
+    "INSERT INTO note_folders (id, name, color, sort_order) VALUES (?, ?, ?, ?)",
+    [id, f.name, f.color, sortOrder]
+  );
+  return { id, name: f.name, color: f.color, sortOrder };
+}
+
+export async function updateFolder(id: string, changes: { name?: string; color?: string }): Promise<void> {
+  const db = await getDb();
+  const sets: string[] = [];
+  const vals: any[] = [];
+  if (changes.name !== undefined) { sets.push("name = ?"); vals.push(changes.name); }
+  if (changes.color !== undefined) { sets.push("color = ?"); vals.push(changes.color); }
+  if (sets.length === 0) return;
+  vals.push(id);
+  await db.execute(`UPDATE note_folders SET ${sets.join(", ")} WHERE id = ?`, vals);
+}
+
+export async function deleteFolder(id: string): Promise<void> {
+  const db = await getDb();
+  // ON DELETE SET NULL로 소속 노트는 루트(폴더 없음)로 빠짐
+  await db.execute("DELETE FROM note_folders WHERE id = ?", [id]);
+}
+
 // ── checklist_items (체크리스트형 자식 — 무제한 중첩) ─────────────
 export async function fetchChecklistItems(blockId: string) {
   const db = await getDb();
