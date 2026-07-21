@@ -7,9 +7,9 @@ import {
   Folder, FolderPlus, MoreVertical, ArrowLeft, ArrowUpDown, Trash2,
 } from "lucide-react";
 import {
-  fetchTemplates, createTemplate, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
+  fetchTemplates, createTemplate, deleteTemplateRow, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, insertBlocksBulk,
-  fetchDeadlines, createDeadline, toggleDeadlineRow,
+  fetchDeadlines, createDeadline, toggleDeadlineRow, deleteDeadlineRow,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
   fetchTodaySessions, startTimerSession, endTimerSession, deleteTodaySessions, fetchFocusSecByDate,
   fetchChecklistItems, createChecklistItem, toggleChecklistItemRow, deleteChecklistItemRow,
@@ -543,12 +543,24 @@ export default function App() {
     toggleDeadlineRow(id, completed).catch(console.error);
   };
 
+  const deleteDeadline = (id: string) => {
+    setDeadlines(ds => ds.filter(d => d.id !== id));
+    deleteDeadlineRow(id).catch(console.error);
+  };
+
   const addTemplate = (t: { title: string; color: string; tags: string[] }) => {
     const tempId = `temp-${Date.now()}`;
     setTemplates(ts => [...ts, { id: tempId, ...t }]);
     createTemplate(t)
       .then(real => setTemplates(ts => ts.map(x => (x.id === tempId ? real : x))))
       .catch(e => { console.error(e); setTemplates(ts => ts.filter(x => x.id !== tempId)); });
+  };
+
+  // 템플릿 삭제 — 이미 이 템플릿으로 만들어진 블록은 그대로 두고 template_id만 NULL로 끊김.
+  const deleteTemplate = (id: string) => {
+    setTemplates(ts => ts.filter(x => x.id !== id));
+    setBlocks(bs => bs.map(b => b.templateId === id ? { ...b, templateId: undefined } : b));
+    deleteTemplateRow(id).catch(console.error);
   };
 
   const addDeadline = (d: { title: string; dueDate: string }) => {
@@ -668,6 +680,7 @@ export default function App() {
           {section === "calendar" && (
             <CalendarSection
               blocks={blocks}
+              deadlines={deadlines}
               templates={templates}
               calView={calView}
               setCalView={setCalView}
@@ -677,6 +690,7 @@ export default function App() {
               setTemplateOpen={setTemplateOpen}
               onSelect={setSelectedBlock}
               onToggle={toggleBlock}
+              onToggleDeadline={toggleDeadline}
               onAddBlock={addBlock}
               onUpdateBlock={updateBlock}
               onUpdateBlockLocal={updateBlockLocal}
@@ -686,10 +700,11 @@ export default function App() {
               onApplyTemplate={applyScheduleTemplate}
               onDeleteTemplate={deleteScheduleTemplate}
               onAddTemplate={addTemplate}
+              onDeleteBlockTemplate={deleteTemplate}
             />
           )}
           {section === "deadlines" && (
-            <DeadlinesSection deadlines={deadlines} onToggle={toggleDeadline} onAddDeadline={addDeadline} />
+            <DeadlinesSection deadlines={deadlines} onToggle={toggleDeadline} onAddDeadline={addDeadline} onDelete={deleteDeadline} />
           )}
           {section === "grass" && (
             <GrassSection
@@ -789,9 +804,9 @@ function GlobalTimer({
       <div
         className={`flex items-center gap-3 px-4 py-1.5 rounded-xl border transition-all ${
           isBreak
-            ? "bg-sky-50 border-sky-200"
+            ? "bg-indigo-50 border-indigo-200"
             : isRunning
-            ? "bg-green-50 border-green-200"
+            ? "bg-sky-50 border-sky-200"
             : isAutoPaused
             ? "bg-amber-50 border-amber-200"
             : "bg-muted/40 border-border"
@@ -801,16 +816,16 @@ function GlobalTimer({
         <div className="flex items-center gap-2">
           <span
             className={`size-2 rounded-full flex-shrink-0 ${
-              isBreak ? "bg-sky-500 animate-pulse" :
-              isRunning ? "bg-green-500 animate-pulse" :
+              isBreak ? "bg-indigo-500 animate-pulse" :
+              isRunning ? "bg-sky-500 animate-pulse" :
               isAutoPaused ? "bg-amber-400" :
               "bg-muted-foreground/40"
             }`}
           />
           <span
             className={`text-[11px] font-medium w-16 ${
-              isBreak ? "text-sky-700" :
-              isRunning ? "text-green-700" :
+              isBreak ? "text-indigo-700" :
+              isRunning ? "text-sky-700" :
               isAutoPaused ? "text-amber-700" :
               "text-muted-foreground"
             }`}
@@ -822,7 +837,7 @@ function GlobalTimer({
         {/* 뽀모도로 phase 남은 시간 — 활성일 때만 노출 */}
         {pomodoroOn && isRunning && (
           <span
-            className={`text-[11px] tabular-nums font-medium ${isBreak ? "text-sky-700" : "text-green-700"}`}
+            className={`text-[11px] tabular-nums font-medium ${isBreak ? "text-indigo-700" : "text-sky-700"}`}
             title={isBreak ? "휴식 남은 시간" : "집중 남은 시간"}
           >
             {fmtSec(pomPhaseRemainSec)}
@@ -834,7 +849,7 @@ function GlobalTimer({
           onClick={() => setShowHistory(v => !v)}
           title="오늘의 집중 기록 보기"
           className={`text-xl font-medium tabular-nums w-20 text-center rounded-md hover:bg-black/5 transition-colors ${
-            isRunning ? "text-green-800" :
+            isRunning ? "text-sky-800" :
             isAutoPaused ? "text-amber-800" :
             "text-muted-foreground"
           }`}
@@ -848,7 +863,7 @@ function GlobalTimer({
             <button
               onClick={onStart}
               title="타이머 시작"
-              className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-sky-600 text-white text-xs font-medium hover:bg-sky-700 transition-colors"
             >
               <Play size={11} fill="white" /> 시작
             </button>
@@ -867,7 +882,7 @@ function GlobalTimer({
               <button
                 onClick={onStart}
                 title="재시작"
-                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-sky-600 text-white text-xs font-medium hover:bg-sky-700 transition-colors"
               >
                 <Play size={11} fill="white" /> 재시작
               </button>
@@ -953,7 +968,7 @@ function TimerHistoryPopover({ sessions, onClose, onReset }: { sessions: TimerSe
             {segments.slice().reverse().map((seg, i) => (
               <div key={i} className="flex items-center gap-2 text-[11px]">
                 {seg.type === "focus" ? (
-                  <span className="size-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                  <span className="size-1.5 rounded-full bg-sky-500 flex-shrink-0" />
                 ) : (
                   <span className="size-1.5 rounded-full bg-muted-foreground/40 flex-shrink-0" />
                 )}
@@ -1003,10 +1018,10 @@ function CircleProgress({ value, size, strokeWidth = 5 }: { value: number; size:
   const dash = (value / 100) * circ;
   return (
     <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#E8E2D6" strokeWidth={strokeWidth} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#E4EEF7" strokeWidth={strokeWidth} />
       <circle
         cx={size / 2} cy={size / 2} r={r} fill="none"
-        stroke="#6B9B37" strokeWidth={strokeWidth}
+        stroke="#5AA9E6" strokeWidth={strokeWidth}
         strokeDasharray={`${dash} ${circ - dash}`}
         strokeLinecap="round"
         style={{ transition: "stroke-dasharray 0.4s ease" }}
@@ -1164,11 +1179,12 @@ function TodaySection({
 
 // ── Calendar Section ───────────────────────────────────────────────
 function CalendarSection({
-  blocks, templates, calView, setCalView, calMode, setCalMode,
-  templateOpen, setTemplateOpen, onSelect, onToggle, onAddBlock, onUpdateBlock, onUpdateBlockLocal, onDeleteBlock,
-  scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate, onAddTemplate,
+  blocks, deadlines, templates, calView, setCalView, calMode, setCalMode,
+  templateOpen, setTemplateOpen, onSelect, onToggle, onToggleDeadline, onAddBlock, onUpdateBlock, onUpdateBlockLocal, onDeleteBlock,
+  scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate, onAddTemplate, onDeleteBlockTemplate,
 }: {
   blocks: Block[];
+  deadlines: Deadline[];
   templates: Template[];
   calView: "day" | "week" | "month";
   setCalView: (v: "day" | "week" | "month") => void;
@@ -1178,6 +1194,7 @@ function CalendarSection({
   setTemplateOpen: (v: boolean) => void;
   onSelect: (b: Block) => void;
   onToggle: (id: string) => void;
+  onToggleDeadline: (id: string) => void;
   onAddBlock: (block: Block) => void;
   onUpdateBlock: (id: string, changes: Partial<Block>) => void;
   onUpdateBlockLocal: (id: string, changes: Partial<Block>) => void;
@@ -1187,6 +1204,7 @@ function CalendarSection({
   onApplyTemplate: (templateId: string, targetDate: string) => void;
   onDeleteTemplate: (id: string) => void;
   onAddTemplate: (t: { title: string; color: string; tags: string[] }) => void;
+  onDeleteBlockTemplate: (id: string) => void;
 }) {
   const HOUR_H = 64;
   const TOTAL_H = 24;
@@ -1202,7 +1220,7 @@ function CalendarSection({
   const [showTplHelp, setShowTplHelp] = useState(false);
   const [showNewTpl, setShowNewTpl] = useState(false);
   const [newTplTitle, setNewTplTitle] = useState("");
-  const [newTplColor, setNewTplColor] = useState("#6B9B37");
+  const [newTplColor, setNewTplColor] = useState("#5AA9E6");
   const [newTplTags, setNewTplTags] = useState("");
   const [dragTplId, setDragTplId] = useState<string | null>(null);
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
@@ -1335,14 +1353,38 @@ function CalendarSection({
         })}
       </div>
 
-      {/* Scrollable grid */}
+      {/* Scrollable grid — 마감 슬롯도 이 안에 넣어야 그리드와 폭이 정확히 맞음(스크롤바 폭 이슈) */}
       <div ref={gridScrollRef} className="flex-1 overflow-auto">
+        {/* 마감 슬롯 — sticky로 상단 고정, 스크롤해도 화면에 계속 보임 */}
+        <div className="flex border-b border-border sticky top-0 z-20 bg-card min-h-[36px]">
+          <div className="w-12 flex-shrink-0 flex items-start justify-end pt-1.5 pr-2 text-[9px] text-muted-foreground select-none">마감</div>
+          {days.map((day, di) => {
+            const dateStr = toDateStr(day);
+            const dayDeadlines = deadlines.filter(d => d.dueDate === dateStr);
+            return (
+              <div key={di} className="flex-1 border-l border-border py-1 px-1 min-w-0 space-y-0.5">
+                {dayDeadlines.map(d => (
+                  <button
+                    key={d.id}
+                    onClick={e => { e.stopPropagation(); onToggleDeadline(d.id); }}
+                    title={d.completed ? "완료됨 — 다시 열기" : "완료 처리"}
+                    className={`w-full flex items-center gap-1 text-left text-[10px] px-1.5 py-0.5 rounded transition-colors ${d.completed ? "bg-muted/40 text-muted-foreground line-through" : "bg-red-100 text-red-700 hover:bg-red-200"}`}
+                  >
+                    <Target size={9} className="flex-shrink-0" />
+                    <span className="truncate">{d.title}</span>
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+
         <div className="flex" style={{ height: TOTAL_H * HOUR_H }}>
-          {/* Hour labels */}
+          {/* Hour labels — h=0 라벨은 top clamp로 잘리지 않게 */}
           <div className="w-12 flex-shrink-0 relative select-none">
             {Array.from({ length: TOTAL_H }, (_, h) => (
               <div key={h} className="absolute right-2 text-[10px] text-muted-foreground"
-                style={{ top: h * HOUR_H - 7 }}>
+                style={{ top: h === 0 ? 2 : h * HOUR_H - 7 }}>
                 {fmt2(h)}
               </div>
             ))}
@@ -1362,7 +1404,7 @@ function CalendarSection({
             return (
               <div
                 key={di}
-                className={`flex-1 relative border-l border-border min-w-0 ${isToday ? "bg-green-50/10" : ""}`}
+                className={`flex-1 relative border-l border-border min-w-0 ${isToday ? "bg-sky-50/10" : ""}`}
                 style={{ height: TOTAL_H * HOUR_H }}
                 onDragOver={e => {
                   e.preventDefault();
@@ -1559,6 +1601,7 @@ function CalendarSection({
             const row = Math.floor(i / 7);
             const dayBlocks = topLevelBlocks.filter(b => b.date === dateStr)
               .sort((a,b) => a.startH*60+a.startM - (b.startH*60+b.startM));
+            const dayDeadlines = deadlines.filter(d => d.dueDate === dateStr);
             const MAX = 3;
             const shown = dayBlocks.slice(0, MAX);
             const overflow = dayBlocks.length - MAX;
@@ -1592,6 +1635,22 @@ function CalendarSection({
                     {day.getDate()}
                   </span>
                 </div>
+                {/* 마감(별도) — 블록보다 위에 표시 */}
+                {dayDeadlines.length > 0 && (
+                  <div className="space-y-0.5 mb-0.5">
+                    {dayDeadlines.map(d => (
+                      <div
+                        key={d.id}
+                        onClick={e => { e.stopPropagation(); onToggleDeadline(d.id); }}
+                        className={`flex items-center gap-1 px-1 py-0.5 rounded text-[9px] cursor-pointer transition-colors ${d.completed ? "bg-muted/40 text-muted-foreground line-through" : "bg-red-100 text-red-700 hover:bg-red-200"}`}
+                        title={d.completed ? "완료됨 — 다시 열기" : "완료 처리"}
+                      >
+                        <Target size={8} className="flex-shrink-0" />
+                        <span className="truncate font-medium leading-tight">{d.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="space-y-0.5">
                   {shown.map(block => (
                     <div key={block.id} onClick={() => onSelect(block)}
@@ -1620,31 +1679,68 @@ function CalendarSection({
       : viewDays.flatMap(d => topLevelBlocks.filter(b => b.date === toDateStr(d)));
     const sorted = [...listBlocks].sort((a,b) => a.startH*60+a.startM - (b.startH*60+b.startM));
 
+    const listDeadlines = calView === "day"
+      ? deadlines.filter(d => d.dueDate === dateStr)
+      : viewDays.flatMap(d => deadlines.filter(x => x.dueDate === toDateStr(d)));
+    const sortedDeadlines = [...listDeadlines].sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
     return (
       <div className="flex-1 overflow-y-auto p-6">
-        <div className="space-y-2 max-w-lg">
-          {sorted.map(block => (
-            <div key={block.id}
-              className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-card cursor-pointer hover:shadow-sm transition-all"
-              onClick={() => onSelect(block)}
-            >
-              <button onClick={e => { e.stopPropagation(); onToggle(block.id); }}>
-                {block.completed ? <CheckCircle2 size={18} style={{ color: block.color }} /> : <Circle size={18} className="text-muted-foreground" />}
-              </button>
-              <span className="w-0.5 h-8 rounded-full flex-shrink-0" style={{ backgroundColor: block.color }} />
-              <div className="flex-1 min-w-0">
-                <div className={`text-sm font-medium ${block.completed?"line-through text-muted-foreground":""}`}>{block.title}</div>
-                <div className="text-[11px] text-muted-foreground">
-                  {block.date !== TODAY_STR && `${parseLocalDate(block.date).getMonth()+1}/${parseLocalDate(block.date).getDate()} · `}
-                  {fmtTime(block.startH,block.startM)} – {fmtTime(block.endH,block.endM)}
-                </div>
+        <div className="max-w-lg space-y-6">
+          {/* 마감 (별도 섹션) */}
+          {sortedDeadlines.length > 0 && (
+            <div>
+              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-2">마감</div>
+              <div className="space-y-2">
+                {sortedDeadlines.map(d => (
+                  <div
+                    key={d.id}
+                    className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer hover:shadow-sm transition-all ${d.completed ? "bg-card opacity-60" : "border-red-200 bg-red-50/40"}`}
+                    onClick={() => onToggleDeadline(d.id)}
+                  >
+                    <Target size={16} className={d.completed ? "text-muted-foreground" : "text-red-500"} />
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-sm font-medium ${d.completed ? "line-through text-muted-foreground" : ""}`}>{d.title}</div>
+                      <div className="text-[11px] text-muted-foreground">{d.dueDate}</div>
+                    </div>
+                  </div>
+                ))}
               </div>
-              {block.tags.map(tag => (
-                <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground flex-shrink-0">{tag}</span>
-              ))}
             </div>
-          ))}
-          {sorted.length === 0 && <p className="text-sm text-muted-foreground py-8 text-center">이 기간에 등록된 블록이 없어요</p>}
+          )}
+
+          {/* 블록 (기존) */}
+          <div>
+            {sortedDeadlines.length > 0 && (
+              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-2">일정</div>
+            )}
+            <div className="space-y-2">
+              {sorted.map(block => (
+                <div key={block.id}
+                  className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-card cursor-pointer hover:shadow-sm transition-all"
+                  onClick={() => onSelect(block)}
+                >
+                  <button onClick={e => { e.stopPropagation(); onToggle(block.id); }}>
+                    {block.completed ? <CheckCircle2 size={18} style={{ color: block.color }} /> : <Circle size={18} className="text-muted-foreground" />}
+                  </button>
+                  <span className="w-0.5 h-8 rounded-full flex-shrink-0" style={{ backgroundColor: block.color }} />
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm font-medium ${block.completed?"line-through text-muted-foreground":""}`}>{block.title}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {block.date !== TODAY_STR && `${parseLocalDate(block.date).getMonth()+1}/${parseLocalDate(block.date).getDate()} · `}
+                      {fmtTime(block.startH,block.startM)} – {fmtTime(block.endH,block.endM)}
+                    </div>
+                  </div>
+                  {block.tags.map(tag => (
+                    <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground flex-shrink-0">{tag}</span>
+                  ))}
+                </div>
+              ))}
+              {sorted.length === 0 && sortedDeadlines.length === 0 && (
+                <p className="text-sm text-muted-foreground py-8 text-center">이 기간에 등록된 항목이 없어요</p>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -1697,9 +1793,17 @@ function CalendarSection({
                 <div key={t.id} draggable
                   onDragStart={e => { e.dataTransfer.setData("templateId", t.id); setDragTplId(t.id); }}
                   onDragEnd={() => { setDragTplId(null); setDropTarget(null); }}
-                  className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent cursor-grab active:cursor-grabbing transition-colors text-xs select-none">
+                  className="group/tpl flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent cursor-grab active:cursor-grabbing transition-colors text-xs select-none">
                   <span className="size-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: t.color }} />
-                  <span className="truncate text-foreground/80">{t.title}</span>
+                  <span className="flex-1 truncate text-foreground/80">{t.title}</span>
+                  <button
+                    onClick={e => { e.stopPropagation(); onDeleteBlockTemplate(t.id); }}
+                    onMouseDown={e => e.stopPropagation()}
+                    onDragStart={e => { e.stopPropagation(); e.preventDefault(); }}
+                    draggable={false}
+                    title="템플릿 삭제 (기존 블록은 유지)"
+                    className="opacity-0 group-hover/tpl:opacity-100 transition-opacity p-0.5 text-muted-foreground hover:text-destructive flex-shrink-0"
+                  ><X size={11} /></button>
                 </div>
               ))}
               {showNewTpl ? (
@@ -1798,7 +1902,7 @@ function CalendarSection({
                     <input autoFocus value={saveTplName} onChange={e => setSaveTplName(e.target.value)}
                       placeholder="이름..."
                       className="flex-1 text-[10px] px-2 py-1 rounded bg-muted outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground" />
-                    <button type="submit" className="text-[10px] text-green-600 font-medium px-1">저장</button>
+                    <button type="submit" className="text-[10px] text-sky-600 font-medium px-1">저장</button>
                     <button type="button" onClick={() => setShowSaveTpl(false)} className="text-muted-foreground"><X size={10}/></button>
                   </form>
                 ) : (
@@ -1826,11 +1930,12 @@ function CalendarSection({
 
 // ── Deadlines Section ──────────────────────────────────────────────
 function DeadlinesSection({
-  deadlines, onToggle, onAddDeadline,
+  deadlines, onToggle, onAddDeadline, onDelete,
 }: {
   deadlines: Deadline[];
   onToggle: (id: string) => void;
   onAddDeadline: (d: { title: string; dueDate: string }) => void;
+  onDelete: (id: string) => void;
 }) {
   const active = deadlines.filter(d => !d.completed);
   const overdue = active.filter(d => d.dueDate < TODAY_STR);
@@ -1858,7 +1963,7 @@ function DeadlinesSection({
             </div>
             <div className="space-y-2">
               {overdue.map(d => (
-                <div key={d.id} className="flex items-center gap-4 px-4 py-3.5 rounded-xl border border-red-200 bg-red-50/40">
+                <div key={d.id} className="group/dl flex items-center gap-4 px-4 py-3.5 rounded-xl border border-red-200 bg-red-50/40">
                   <button onClick={() => onToggle(d.id)}><Circle size={18} className="text-red-400" /></button>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium">{d.title}</div>
@@ -1867,6 +1972,11 @@ function DeadlinesSection({
                   <span className="text-[11px] px-2.5 py-1 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">
                     {Math.abs(daysLeft(d.dueDate))}일 초과
                   </span>
+                  <button
+                    onClick={() => onDelete(d.id)}
+                    title="삭제"
+                    className="opacity-0 group-hover/dl:opacity-100 transition-opacity p-1 text-muted-foreground hover:text-destructive flex-shrink-0"
+                  ><Trash2 size={14} /></button>
                 </div>
               ))}
             </div>
@@ -1882,7 +1992,7 @@ function DeadlinesSection({
             {upcoming.map(d => {
               const dl = daysLeft(d.dueDate);
               return (
-                <div key={d.id} className="flex items-center gap-4 px-4 py-3.5 rounded-xl border bg-card">
+                <div key={d.id} className="group/dl flex items-center gap-4 px-4 py-3.5 rounded-xl border bg-card">
                   <button onClick={() => onToggle(d.id)}><Circle size={18} className="text-muted-foreground" /></button>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium">{d.title}</div>
@@ -1891,6 +2001,11 @@ function DeadlinesSection({
                   <span className={`text-[11px] px-2.5 py-1 rounded-full font-medium flex-shrink-0 ${dl <= 3 ? "bg-amber-100 text-amber-700" : "bg-muted text-muted-foreground"}`}>
                     D-{dl}
                   </span>
+                  <button
+                    onClick={() => onDelete(d.id)}
+                    title="삭제"
+                    className="opacity-0 group-hover/dl:opacity-100 transition-opacity p-1 text-muted-foreground hover:text-destructive flex-shrink-0"
+                  ><Trash2 size={14} /></button>
                 </div>
               );
             })}
@@ -1942,9 +2057,14 @@ function DeadlinesSection({
             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">완료됨</div>
             <div className="space-y-2 opacity-50">
               {completed.map(d => (
-                <div key={d.id} className="flex items-center gap-4 px-4 py-3 rounded-xl border">
-                  <button onClick={() => onToggle(d.id)}><CheckCircle2 size={18} className="text-green-600" /></button>
-                  <div className="text-sm line-through text-muted-foreground">{d.title}</div>
+                <div key={d.id} className="group/dl flex items-center gap-4 px-4 py-3 rounded-xl border">
+                  <button onClick={() => onToggle(d.id)}><CheckCircle2 size={18} className="text-sky-600" /></button>
+                  <div className="flex-1 min-w-0 text-sm line-through text-muted-foreground">{d.title}</div>
+                  <button
+                    onClick={() => onDelete(d.id)}
+                    title="삭제"
+                    className="opacity-0 group-hover/dl:opacity-100 transition-opacity p-1 text-muted-foreground hover:text-destructive flex-shrink-0"
+                  ><Trash2 size={14} /></button>
                 </div>
               ))}
             </div>
@@ -2074,7 +2194,7 @@ function GrassSection({
               <CircleProgress value={completionRate} size={44} />
             </div>
             <div className="mt-3 h-1 rounded-full bg-muted overflow-hidden">
-              <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${completionRate}%` }} />
+              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${completionRate}%` }} />
             </div>
           </div>
 
@@ -2097,7 +2217,7 @@ function GrassSection({
                     className="w-14 px-1.5 py-0.5 text-xs rounded bg-muted outline-none focus:ring-1 focus:ring-ring"
                                      />
                   <span className="text-[11px] text-muted-foreground">시간</span>
-                  <button type="submit" className="p-0.5 text-green-600 hover:text-green-700"><Check size={12} /></button>
+                  <button type="submit" className="p-0.5 text-sky-600 hover:text-sky-700"><Check size={12} /></button>
                 </form>
               ) : (
                 <button
@@ -2145,7 +2265,7 @@ function GrassSection({
               <span className="text-sm font-semibold">{viewYear}년 {viewMonth + 1}월</span>
               <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
                 <span className="flex items-center gap-1">
-                  <span className="inline-block size-2.5 rounded-sm bg-green-100 border border-green-300" />
+                  <span className="inline-block size-2.5 rounded-sm bg-sky-100 border border-sky-300" />
                   목표 달성일
                 </span>
               </div>
@@ -2201,7 +2321,7 @@ function GrassSection({
                   } ${
                     row < totalRows - 1 ? "border-b border-border" : ""
                   } ${
-                    data.goalMet ? "bg-green-50/70" : ""
+                    data.goalMet ? "bg-sky-50/70" : ""
                   } ${
                     isFuture ? "bg-muted/10" : ""
                   } ${
@@ -2220,7 +2340,7 @@ function GrassSection({
                       {dayNum}
                     </span>
                     {data.goalMet && (
-                      <span className="text-[9px] text-green-600 font-medium">✓</span>
+                      <span className="text-[9px] text-sky-600 font-medium">✓</span>
                     )}
                   </div>
 
@@ -2298,7 +2418,7 @@ const SORT_LABELS: Record<SortMode, string> = {
   "date-desc": "날짜 ↓ (최신순)",
 };
 // 폴더 색상 팔레트
-const FOLDER_COLORS = ["#6B9B37", "#5B7EA8", "#7B5EA7", "#D4622A", "#8B6E4E", "#4E8B6E", "#C89A2E", "#B05A7A"];
+const FOLDER_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#4E8B6E", "#C89A2E", "#B05A7A"];
 
 // 마크다운 프리뷰 공용 클래스
 const PROSE_CLASS = "prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-p:my-2 prose-li:my-1 prose-code:before:hidden prose-code:after:hidden prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-a:text-primary";
@@ -3180,7 +3300,7 @@ function BlockDetailPanel({
 
           {repeatType !== "none" && (
             <button onClick={saveRepeat}
-              className={`w-full py-1.5 text-xs rounded-lg font-medium transition-all ${showRepeatSaved ? "bg-green-100 text-green-700" : "bg-muted hover:bg-muted/70 text-foreground"}`}>
+              className={`w-full py-1.5 text-xs rounded-lg font-medium transition-all ${showRepeatSaved ? "bg-sky-100 text-sky-700" : "bg-muted hover:bg-muted/70 text-foreground"}`}>
               {showRepeatSaved ? "✓ 반복 저장됨" : "반복 저장"}
             </button>
           )}
@@ -3251,7 +3371,7 @@ function ChecklistNode({
       <div className="group flex items-center gap-1.5 text-xs py-0.5">
         <button onClick={() => onToggle(item.id, !item.completed)} className="flex-shrink-0">
           {item.completed
-            ? <CheckCircle2 size={13} className="text-green-500" />
+            ? <CheckCircle2 size={13} className="text-sky-500" />
             : <Circle size={13} className="text-muted-foreground" />
           }
         </button>
@@ -3309,7 +3429,7 @@ function NewChecklistItemForm({
         className="flex-1 text-xs px-2 py-1 rounded bg-muted outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
       />
       {text && (
-        <button type="submit" className="text-[11px] text-green-600 hover:text-green-700 px-1.5">추가</button>
+        <button type="submit" className="text-[11px] text-sky-600 hover:text-sky-700 px-1.5">추가</button>
       )}
     </form>
   );

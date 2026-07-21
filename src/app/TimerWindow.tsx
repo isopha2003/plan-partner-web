@@ -47,7 +47,7 @@ export default function TimerWindow() {
     <div
       data-tauri-drag-region
       className={`relative h-screen flex flex-col items-center justify-center gap-1 rounded-xl ${
-        isBreak ? "bg-sky-50" : isRunning ? "bg-muted/40" : isAutoPaused ? "bg-amber-50" : "bg-green-50"
+        isBreak ? "bg-indigo-50" : isRunning ? "bg-sky-50" : isAutoPaused ? "bg-amber-50" : "bg-muted/40"
       }`}
     >
       <button
@@ -59,7 +59,7 @@ export default function TimerWindow() {
       </button>
 
       {pomodoroOn && isRunning && (
-        <div className={`text-[10px] font-medium tabular-nums ${isBreak ? "text-sky-700" : "text-green-700"}`}>
+        <div className={`text-[10px] font-medium tabular-nums ${isBreak ? "text-indigo-700" : "text-sky-700"}`}>
           {isBreak ? "휴식" : "집중"} · {fmtSec(pomPhaseRemainSec)}
         </div>
       )}
@@ -67,14 +67,14 @@ export default function TimerWindow() {
       <div
         data-tauri-drag-region
         className={`text-3xl font-medium tabular-nums ${
-          isBreak ? "text-sky-800" : isRunning ? "text-muted-foreground" : isAutoPaused ? "text-amber-800" : "text-green-800"
+          isBreak ? "text-indigo-800" : isRunning ? "text-sky-800" : isAutoPaused ? "text-amber-800" : "text-muted-foreground"
         }`}
       >
         {fmtSec(timerSec)}
       </div>
       <div className="flex gap-2">
         {timerState === "stopped" && (
-          <button onClick={start} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-medium">
+          <button onClick={start} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-medium">
             <Play size={11} fill="white" /> 시작
           </button>
         )}
@@ -85,7 +85,7 @@ export default function TimerWindow() {
         )}
         {isAutoPaused && (
           <>
-            <button onClick={start} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-medium">
+            <button onClick={start} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-medium">
               <Play size={11} fill="white" /> 재시작
             </button>
             <button onClick={stop} className="p-2 rounded-lg bg-muted text-muted-foreground">

@@ -53,6 +53,14 @@ export async function createTemplate(t: { title: string; color: string; tags: st
   return { id, title: t.title, color: t.color, tags: t.tags };
 }
 
+// 블록 템플릿 삭제 — 이 템플릿으로 만들어진 기존 블록은 그대로 남고 template_id만
+// NULL이 됨(스키마의 ON DELETE SET NULL). 즉 캘린더에 이미 놓인 블록은 사라지지 않고,
+// 태그 조인만 끊어져 template.tags 자동 상속이 없어질 뿐.
+export async function deleteTemplateRow(id: string) {
+  const db = await getDb();
+  await db.execute("DELETE FROM block_templates WHERE id = ?", [id]);
+}
+
 // ── blocks ──────────────────────────────────────────────────────
 // SELECT 시 template의 tags를 함께 조인해서 UI가 그대로 쓸 수 있게 함
 const BLOCK_SELECT = `
@@ -204,6 +212,11 @@ export async function toggleDeadlineRow(id: string, completed: boolean) {
     "UPDATE deadlines SET completed = ?, completed_at = ? WHERE id = ?",
     [completed ? 1 : 0, completed ? new Date().toISOString() : null, id]
   );
+}
+
+export async function deleteDeadlineRow(id: string) {
+  const db = await getDb();
+  await db.execute("DELETE FROM deadlines WHERE id = ?", [id]);
 }
 
 // ── schedule_templates ─────────────────────────────────────────
