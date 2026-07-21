@@ -3253,21 +3253,22 @@ function SettingsSection({
 }) {
   // 데이터 백업/업데이트 상태 — JSON export/import UI는 개인용에서 직관적이지 않아 제거,
   // 데이터 이전이 필요할 때는 %APPDATA%/…/backups 폴더의 .db 파일을 직접 복사하면 됨.
-  const [busy, setBusy] = useState<null | "backup" | "update">(null);
-  const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  // fade in → 1s hold → fade out 애니메이션을 위한 opacity 토글
+  type Target = "backup" | "update";
+  const [busy, setBusy] = useState<null | Target>(null);
+  // 상태 토스트를 각 버튼 옆에 인라인 표시 — target으로 어느 버튼에 붙일지 지정.
+  const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string; target: Target } | null>(null);
   const [statusVisible, setStatusVisible] = useState(false);
   const flashTimersRef = useRef<number[]>([]);
   const [lastBackupTs, setLastBackupTs] = useState<number | null>(getLastBackupTimestamp());
-  const flash = (kind: "ok" | "err", text: string) => {
+  const flash = (target: Target, kind: "ok" | "err", text: string) => {
     flashTimersRef.current.forEach(t => window.clearTimeout(t));
     flashTimersRef.current = [];
-    setStatusMsg({ kind, text });
+    setStatusMsg({ kind, text, target });
     setStatusVisible(false);
-    // 순서: mount → 20ms 뒤 opacity 0→1 (fade in) → 1s 유지 → opacity 1→0 (fade out) → unmount
+    // 순서: mount → 20ms 뒤 opacity 0→1 (fade in 300ms) → 0.8s 유지 → opacity 1→0 (fade out 300ms) → unmount
     flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(true), 20));
-    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(false), 1300));
-    flashTimersRef.current.push(window.setTimeout(() => setStatusMsg(null), 1650));
+    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(false), 1120));
+    flashTimersRef.current.push(window.setTimeout(() => setStatusMsg(null), 1450));
   };
   useEffect(() => () => { flashTimersRef.current.forEach(t => window.clearTimeout(t)); }, []);
 
@@ -3276,9 +3277,9 @@ function SettingsSection({
     try {
       await createBackupNow();
       setLastBackupTs(getLastBackupTimestamp());
-      flash("ok", "백업 성공");
+      flash("backup", "ok", "백업 성공");
     } catch (e: any) {
-      flash("err", `백업 실패: ${e?.message ?? e}`);
+      flash("backup", "err", `백업 실패: ${e?.message ?? e}`);
     } finally { setBusy(null); }
   };
   const handleUpdateCheck = async () => {
@@ -3286,16 +3287,16 @@ function SettingsSection({
     try {
       const r = await checkForUpdate();
       if (r.status === "up-to-date") {
-        flash("ok", "이미 최신 버전이에요.");
+        flash("update", "ok", "이미 최신 버전이에요.");
       } else if (r.status === "available") {
         if (confirm(`새 버전 v${r.next}이(가) 있어요.\n\n${r.notes || "(변경사항 없음)"}\n\n지금 설치하고 재시작할까요?`)) {
           await installUpdate(r.update);
         }
       } else {
-        flash("err", `업데이트 확인 실패: ${r.error}`);
+        flash("update", "err", `업데이트 확인 실패: ${r.error}`);
       }
     } catch (e: any) {
-      flash("err", `업데이트 확인 실패: ${e?.message ?? e}`);
+      flash("update", "err", `업데이트 확인 실패: ${e?.message ?? e}`);
     } finally { setBusy(null); }
   };
 
@@ -3308,11 +3309,6 @@ function SettingsSection({
       <div className="max-w-lg mx-auto px-8 py-8">
         <h2 className="text-3xl font-medium mb-2">설정</h2>
         <p className="text-sm text-muted-foreground mb-8">타이머 · 알림 · 뽀모도로 · 테마 · 데이터 · 업데이트</p>
-        {statusMsg && (
-          <div className={`mb-4 px-3 py-2 rounded-lg text-[11px] transition-opacity duration-300 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"}`}>
-            {statusMsg.text}
-          </div>
-        )}
 
         <div className="space-y-4">
           <div className="p-5 rounded-xl border bg-card">
@@ -3374,11 +3370,18 @@ function SettingsSection({
             <div className="text-[11px] text-muted-foreground mb-3">
               하루 1회 자동 백업 · 마지막 백업: <span className="text-foreground">{lastBackupLabel}</span>
             </div>
-            <button
-              onClick={handleBackupNow}
-              disabled={!!busy}
-              className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
-            >{busy === "backup" ? "백업 중…" : "지금 백업"}</button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleBackupNow}
+                disabled={!!busy}
+                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
+              >{busy === "backup" ? "백업 중…" : "지금 백업"}</button>
+              {statusMsg?.target === "backup" && (
+                <span className={`text-[11px] transition-opacity duration-300 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
+                  {statusMsg.text}
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="p-5 rounded-xl border bg-card">
@@ -3386,11 +3389,18 @@ function SettingsSection({
             <div className="text-[11px] text-muted-foreground mb-3">
               최신 릴리스를 확인하고 설치. 서명된 패키지만 적용되며 설치 후 앱이 재시작됩니다.
             </div>
-            <button
-              onClick={handleUpdateCheck}
-              disabled={!!busy}
-              className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 disabled:opacity-50"
-            >{busy === "update" ? "확인 중…" : "업데이트 확인"}</button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleUpdateCheck}
+                disabled={!!busy}
+                className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 disabled:opacity-50"
+              >{busy === "update" ? "확인 중…" : "업데이트 확인"}</button>
+              {statusMsg?.target === "update" && (
+                <span className={`text-[11px] transition-opacity duration-300 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
+                  {statusMsg.text}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>
