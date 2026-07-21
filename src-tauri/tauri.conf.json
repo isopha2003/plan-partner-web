@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -37,6 +38,14 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNDQjc5QzUzNkExMEU5MjcKUldRbjZSQnFVNXkzUEZlTkJxYStvRnlJOHo3a1BYZGM5MzN4UDNTOXNWdWU3eElaSFAyREZXT3UK",
+      "endpoints": [
+        "https://github.com/isopha2003/plan-partner-web/releases/latest/download/latest.json"
+      ]
     }
   }
 }

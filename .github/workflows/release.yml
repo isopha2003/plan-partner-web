@@ -1,0 +1,66 @@
+name: release
+
+# tag push로 트리거 — 로컬에서
+#   npm version patch|minor|major -m "chore(release): v%s"
+#   git push --follow-tags
+# 하면 GitHub이 이 워크플로우를 돌려 Windows/macOS 인스톨러를 빌드하고 서명된
+# latest.json + 인스톨러를 Release 자산으로 자동 업로드. Tauri 앱은
+# tauri.conf.json의 endpoint에서 이 latest.json을 읽어 자동 업데이트를 수행.
+#
+# ⚠ Secrets 설정 필요 (Repo → Settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY          — src-tauri/updater.key 파일 내용 전체
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — 키 생성 시 지정한 비밀번호 (없으면 빈 값)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build & release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "생활 플래너 ${{ github.ref_name }}"
+          releaseBody: "자세한 변경사항은 커밋 로그 참고."
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

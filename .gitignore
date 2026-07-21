@@ -3,3 +3,7 @@ dist
 .env
 .env.local
 tauri-dev.log
+
+# Tauri auto-updater 개인 서명 키 — 절대 커밋 금지. 공개 키(.pub)만 tauri.conf.json에 담겨 커밋됨.
+src-tauri/updater.key
+src-tauri/updater.key.pub

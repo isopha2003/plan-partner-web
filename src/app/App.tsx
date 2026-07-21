@@ -20,6 +20,8 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { type TimerState, fmtSec } from "../lib/timer";
+import { runAutoBackupIfNeeded, createBackupNow, exportToJson, importFromJson, getLastBackupTimestamp } from "../lib/backup";
+import { checkForUpdate, installUpdate } from "../lib/updater";
 import { emit, listen } from "@tauri-apps/api/event";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useTimerWindow } from "./useTimerWindow";
@@ -195,6 +197,8 @@ export default function App() {
         setLoading(false);
       }
     })();
+    // 하루 1회 자동 백업 (백그라운드 실행, 실패는 조용히 무시)
+    runAutoBackupIfNeeded();
   }, []);
 
   // Global timer — single, app-wide. "자동 일시정지"는 사용자가 누르는 버튼이 아니라
@@ -770,6 +774,22 @@ export default function App() {
               pomBreak={pomBreak} setPomBreak={setPomBreak}
               abandonMin={abandonMin} setAbandonMin={setAbandonMin}
               darkMode={darkMode} setDarkMode={setDarkMode}
+              // JSON 가져오기 이후 앱 전체 상태를 다시 로드 — 블록·템플릿·데드라인·타이머 세션까지.
+              onDataChanged={async () => {
+                try {
+                  const [tpls, blks, dls, sts, todaySess, focusMap] = await Promise.all([
+                    fetchTemplates(), fetchBlocks(), fetchDeadlines(), fetchScheduleTemplates(),
+                    fetchTodaySessions(TODAY_STR), fetchFocusSecByDate(),
+                  ]);
+                  setTemplates(tpls);
+                  setBlocks(blks);
+                  setDeadlines(dls);
+                  setScheduleTemplates(sts);
+                  setSessions(todaySess);
+                  setFocusSecByDate(focusMap);
+                  setSelectedBlock(null);
+                } catch (e) { console.error("reload after import failed", e); }
+              }}
             />
           )}
         </main>
@@ -3240,18 +3260,89 @@ function SettingsSection({
   pomodoroOn, setPomodoroOn, pomWork, setPomWork,
   pomBreak, setPomBreak, abandonMin, setAbandonMin,
   darkMode, setDarkMode,
+  onDataChanged,
 }: {
   pomodoroOn: boolean; setPomodoroOn: (v: boolean) => void;
   pomWork: number; setPomWork: (v: number) => void;
   pomBreak: number; setPomBreak: (v: number) => void;
   abandonMin: number; setAbandonMin: (v: number) => void;
   darkMode: boolean; setDarkMode: (v: boolean) => void;
+  onDataChanged: () => void;
 }) {
+  // 데이터 백업/내보내기/가져오기 상태
+  const [busy, setBusy] = useState<null | "backup" | "export" | "import" | "update">(null);
+  const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [lastBackupTs, setLastBackupTs] = useState<number | null>(getLastBackupTimestamp());
+  const flash = (kind: "ok" | "err", text: string) => {
+    setStatusMsg({ kind, text });
+    window.setTimeout(() => setStatusMsg(m => (m?.text === text ? null : m)), 4000);
+  };
+
+  const handleBackupNow = async () => {
+    setBusy("backup");
+    try {
+      const path = await createBackupNow();
+      setLastBackupTs(getLastBackupTimestamp());
+      flash("ok", `백업 완료: ${path}`);
+    } catch (e: any) {
+      flash("err", `백업 실패: ${e?.message ?? e}`);
+    } finally { setBusy(null); }
+  };
+  const handleExport = async () => {
+    setBusy("export");
+    try {
+      const path = await exportToJson();
+      if (path) flash("ok", `내보내기 완료: ${path}`);
+    } catch (e: any) {
+      flash("err", `내보내기 실패: ${e?.message ?? e}`);
+    } finally { setBusy(null); }
+  };
+  const handleImport = async () => {
+    if (!confirm("가져오기를 진행하면 현재 앱 데이터가 파일 내용으로 완전히 대체됩니다. 진행 직전에 자동 안전망 백업이 한 번 더 생성돼요. 계속할까요?")) return;
+    setBusy("import");
+    try {
+      const result = await importFromJson();
+      if (result) {
+        flash("ok", "가져오기 완료 — 최신 상태를 반영합니다.");
+        onDataChanged();
+        setLastBackupTs(getLastBackupTimestamp());
+      }
+    } catch (e: any) {
+      flash("err", `가져오기 실패: ${e?.message ?? e}`);
+    } finally { setBusy(null); }
+  };
+  const handleUpdateCheck = async () => {
+    setBusy("update");
+    try {
+      const r = await checkForUpdate();
+      if (r.status === "up-to-date") {
+        flash("ok", "이미 최신 버전이에요.");
+      } else if (r.status === "available") {
+        if (confirm(`새 버전 v${r.next}이(가) 있어요.\n\n${r.notes || "(변경사항 없음)"}\n\n지금 설치하고 재시작할까요?`)) {
+          await installUpdate(r.update);
+        }
+      } else {
+        flash("err", `업데이트 확인 실패: ${r.error}`);
+      }
+    } catch (e: any) {
+      flash("err", `업데이트 확인 실패: ${e?.message ?? e}`);
+    } finally { setBusy(null); }
+  };
+
+  const lastBackupLabel = lastBackupTs
+    ? new Date(lastBackupTs).toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" })
+    : "없음";
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-lg mx-auto px-8 py-8">
         <h2 className="text-3xl font-medium mb-2">설정</h2>
-        <p className="text-sm text-muted-foreground mb-8">타이머 · 알림 · 뽀모도로 · 테마 설정</p>
+        <p className="text-sm text-muted-foreground mb-8">타이머 · 알림 · 뽀모도로 · 테마 · 데이터 · 업데이트</p>
+        {statusMsg && (
+          <div className={`mb-4 px-3 py-2 rounded-lg text-[11px] ${statusMsg.kind === "ok" ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"}`}>
+            {statusMsg.text}
+          </div>
+        )}
 
         <div className="space-y-4">
           <div className="p-5 rounded-xl border bg-card">
@@ -3306,6 +3397,42 @@ function SettingsSection({
               <input type="number" min={1} value={abandonMin} onChange={e => setAbandonMin(Math.max(1, Number(e.target.value) || 1))}
                 className="w-40 px-3 py-2 rounded-lg bg-muted text-sm outline-none focus:ring-2 focus:ring-ring" />
             </div>
+          </div>
+
+          <div className="p-5 rounded-xl border bg-card">
+            <div className="text-sm font-medium mb-1">데이터 백업</div>
+            <div className="text-[11px] text-muted-foreground mb-3">
+              하루 1회 자동 백업 (최근 10개 유지) · 마지막 백업: <span className="text-foreground">{lastBackupLabel}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={handleBackupNow}
+                disabled={!!busy}
+                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
+              >{busy === "backup" ? "백업 중…" : "지금 백업"}</button>
+              <button
+                onClick={handleExport}
+                disabled={!!busy}
+                className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 disabled:opacity-50"
+              >{busy === "export" ? "내보내는 중…" : "JSON으로 내보내기"}</button>
+              <button
+                onClick={handleImport}
+                disabled={!!busy}
+                className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 disabled:opacity-50"
+              >{busy === "import" ? "가져오는 중…" : "JSON에서 가져오기"}</button>
+            </div>
+          </div>
+
+          <div className="p-5 rounded-xl border bg-card">
+            <div className="text-sm font-medium mb-1">앱 업데이트</div>
+            <div className="text-[11px] text-muted-foreground mb-3">
+              최신 릴리스를 확인하고 설치. 서명된 패키지만 적용되며 설치 후 앱이 재시작됩니다.
+            </div>
+            <button
+              onClick={handleUpdateCheck}
+              disabled={!!busy}
+              className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 disabled:opacity-50"
+            >{busy === "update" ? "확인 중…" : "업데이트 확인"}</button>
           </div>
         </div>
       </div>

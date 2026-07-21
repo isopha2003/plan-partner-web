@@ -13,6 +13,14 @@
     "core:window:allow-start-dragging",
     "notification:default",
     "sql:default",
-    "sql:allow-execute"
+    "sql:allow-execute",
+    "dialog:default",
+    "fs:default",
+    "fs:allow-appdata-read-recursive",
+    "fs:allow-appdata-write-recursive",
+    "fs:allow-appdata-meta-recursive",
+    "updater:default",
+    "process:default",
+    "process:allow-restart"
   ]
 }
