@@ -3255,11 +3255,21 @@ function SettingsSection({
   // 데이터 이전이 필요할 때는 %APPDATA%/…/backups 폴더의 .db 파일을 직접 복사하면 됨.
   const [busy, setBusy] = useState<null | "backup" | "update">(null);
   const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  // fade in → 1s hold → fade out 애니메이션을 위한 opacity 토글
+  const [statusVisible, setStatusVisible] = useState(false);
+  const flashTimersRef = useRef<number[]>([]);
   const [lastBackupTs, setLastBackupTs] = useState<number | null>(getLastBackupTimestamp());
   const flash = (kind: "ok" | "err", text: string) => {
+    flashTimersRef.current.forEach(t => window.clearTimeout(t));
+    flashTimersRef.current = [];
     setStatusMsg({ kind, text });
-    window.setTimeout(() => setStatusMsg(m => (m?.text === text ? null : m)), 4000);
+    setStatusVisible(false);
+    // 순서: mount → 20ms 뒤 opacity 0→1 (fade in) → 1s 유지 → opacity 1→0 (fade out) → unmount
+    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(true), 20));
+    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(false), 1300));
+    flashTimersRef.current.push(window.setTimeout(() => setStatusMsg(null), 1650));
   };
+  useEffect(() => () => { flashTimersRef.current.forEach(t => window.clearTimeout(t)); }, []);
 
   const handleBackupNow = async () => {
     setBusy("backup");
@@ -3299,7 +3309,7 @@ function SettingsSection({
         <h2 className="text-3xl font-medium mb-2">설정</h2>
         <p className="text-sm text-muted-foreground mb-8">타이머 · 알림 · 뽀모도로 · 테마 · 데이터 · 업데이트</p>
         {statusMsg && (
-          <div className={`mb-4 px-3 py-2 rounded-lg text-[11px] ${statusMsg.kind === "ok" ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"}`}>
+          <div className={`mb-4 px-3 py-2 rounded-lg text-[11px] transition-opacity duration-300 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"}`}>
             {statusMsg.text}
           </div>
         )}
@@ -3362,7 +3372,7 @@ function SettingsSection({
           <div className="p-5 rounded-xl border bg-card">
             <div className="text-sm font-medium mb-1">데이터 백업</div>
             <div className="text-[11px] text-muted-foreground mb-3">
-              하루 1회 자동 백업 (최근 10개 유지) · 마지막 백업: <span className="text-foreground">{lastBackupLabel}</span>
+              하루 1회 자동 백업 · 마지막 백업: <span className="text-foreground">{lastBackupLabel}</span>
             </div>
             <button
               onClick={handleBackupNow}
