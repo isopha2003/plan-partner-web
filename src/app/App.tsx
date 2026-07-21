@@ -3397,7 +3397,7 @@ function SettingsSection({
               <button
                 onClick={handleUpdateCheck}
                 disabled={!!busy}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 disabled:opacity-50"
+                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
               >{busy === "update" ? "확인 중…" : "업데이트 확인"}</button>
               {statusMsg?.target === "update" && (
                 <span className={`text-[11px] transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
