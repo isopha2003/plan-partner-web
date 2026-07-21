@@ -3265,9 +3265,13 @@ function SettingsSection({
     flashTimersRef.current = [];
     setStatusMsg({ kind, text, target });
     setStatusVisible(false);
-    // 순서: mount → 20ms 뒤 opacity 0→1 (fade in 300ms) → 1s 유지 → opacity 1→0 (fade out 300ms) → unmount
-    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(true), 20));
-    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(false), 1320));
+    // 순서: mount(opacity-0) → 다음 페인트 프레임 뒤 opacity 0→1 (fade in 300ms) → 1s 유지 → opacity 1→0 (fade out 300ms) → unmount.
+    // requestAnimationFrame을 두 번 감싸서 React 커밋 + 브라우저 첫 페인트가 완전히 끝난 뒤에
+    // opacity 클래스를 바꾸도록 보장 — 안 그러면 브라우저가 opacity-0을 안 그리고 바로 opacity-100으로 뛰어 트랜지션이 안 걸리는 케이스가 있음.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setStatusVisible(true));
+    });
+    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(false), 1300));
     flashTimersRef.current.push(window.setTimeout(() => setStatusMsg(null), 1650));
   };
   useEffect(() => () => { flashTimersRef.current.forEach(t => window.clearTimeout(t)); }, []);
