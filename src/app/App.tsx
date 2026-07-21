@@ -3265,10 +3265,10 @@ function SettingsSection({
     flashTimersRef.current = [];
     setStatusMsg({ kind, text, target });
     setStatusVisible(false);
-    // 순서: mount → 20ms 뒤 opacity 0→1 (fade in 300ms) → 0.8s 유지 → opacity 1→0 (fade out 300ms) → unmount
+    // 순서: mount → 20ms 뒤 opacity 0→1 (fade in 300ms) → 1s 유지 → opacity 1→0 (fade out 300ms) → unmount
     flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(true), 20));
-    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(false), 1120));
-    flashTimersRef.current.push(window.setTimeout(() => setStatusMsg(null), 1450));
+    flashTimersRef.current.push(window.setTimeout(() => setStatusVisible(false), 1320));
+    flashTimersRef.current.push(window.setTimeout(() => setStatusMsg(null), 1650));
   };
   useEffect(() => () => { flashTimersRef.current.forEach(t => window.clearTimeout(t)); }, []);
 
