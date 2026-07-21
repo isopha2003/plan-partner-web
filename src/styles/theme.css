@@ -79,7 +79,7 @@
 }
 
 @theme inline {
-  --font-sans: 'Cafe24Ssurround', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-sans: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

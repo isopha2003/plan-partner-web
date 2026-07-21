@@ -1,3 +1,35 @@
+/* Noto Sans KR — 본문/UI 기본 서체. 정적 TTF 4-weight 번들.
+   Tauri 데스크톱 앱이라 네트워크 로드 없이 로컬 파일만 사용. */
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/noto-sans-kr/NotoSansKR-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/noto-sans-kr/NotoSansKR-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/noto-sans-kr/NotoSansKR-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/noto-sans-kr/NotoSansKR-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 이전 서체 — 어느 컴포넌트에서 명시적으로 참조하는 경우 대비해 남겨둠 */
 @font-face {
   font-family: 'Cafe24Ssurround';
   src: url('../assets/fonts/Cafe24Ssurround-v2.0.ttf') format('truetype');
