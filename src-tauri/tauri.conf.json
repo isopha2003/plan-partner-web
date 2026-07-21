@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "생활 플래너",
-  "version": "0.1.0",
+  "productName": "Plan Partner",
+  "version": "0.0.3",
   "identifier": "com.isopha.planpartner",
   "build": {
     "frontendDist": "../dist",
