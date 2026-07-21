@@ -762,6 +762,10 @@ export default function App() {
               updateBlock(selectedBlock.id, { memo });
               setSelectedBlock({ ...selectedBlock, memo });
             }}
+            onColorSave={(color) => {
+              updateBlock(selectedBlock.id, { color });
+              setSelectedBlock({ ...selectedBlock, color });
+            }}
             onTitleSave={(title) => {
               const wasJustCreated = selectedBlock.id === justCreatedBlockId;
               updateBlock(selectedBlock.id, { title });
@@ -1903,12 +1907,26 @@ function CalendarSection({
                     placeholder="제목..."
                     className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
                   />
+                  {/* 프리셋 색상 팔레트 — 원하는 색을 바로 고르거나 오른쪽 color picker로 직접 지정 */}
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {BLOCK_COLORS.map(c => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setNewTplColor(c)}
+                        className={`size-5 rounded-full transition-transform ${newTplColor.toLowerCase() === c.toLowerCase() ? "ring-2 ring-offset-1 ring-offset-sidebar-accent ring-foreground/40 scale-110" : ""}`}
+                        style={{ backgroundColor: c }}
+                        title={c}
+                      />
+                    ))}
+                  </div>
                   <div className="flex items-center gap-1.5">
                     <input
                       type="color"
                       value={newTplColor}
                       onChange={e => setNewTplColor(e.target.value)}
                       className="size-6 rounded cursor-pointer border border-border flex-shrink-0"
+                      title="사용자 지정 색상"
                     />
                     <input
                       value={newTplTags}
@@ -2507,6 +2525,9 @@ const SORT_LABELS: Record<SortMode, string> = {
 };
 // 폴더 색상 팔레트
 const FOLDER_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#4E8B6E", "#C89A2E", "#B05A7A"];
+// 블록/템플릿 프리셋 팔레트 — 파스텔 블루 톤을 축으로 대비색 몇 가지를 섞음.
+// 사용자 지정 색상은 별도 color picker로 자유롭게 고를 수 있음.
+const BLOCK_COLORS = ["#5AA9E6", "#7CC0F0", "#A78BFA", "#F7A8B8", "#FCB86B", "#6EE7B7", "#C89A2E", "#B05A7A"];
 
 // 마크다운 프리뷰 공용 클래스
 const PROSE_CLASS = "prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-p:my-2 prose-li:my-1 prose-code:before:hidden prose-code:after:hidden prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-a:text-primary";
@@ -3081,7 +3102,7 @@ function SettingsSection({
 
 // ── Block Detail Panel — no timer (v2) ─────────────────────────────
 function BlockDetailPanel({
-  block, childBlocks, templates, sameDayBlocks, initialEditTitle, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave, onTitleSave,
+  block, childBlocks, templates, sameDayBlocks, initialEditTitle, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave, onTitleSave, onColorSave,
   onSelectChild, onToggleChild, onAddTimeblockChild, onGoToParent, onSetNextBlock,
 }: {
   block: Block;
@@ -3096,6 +3117,7 @@ function BlockDetailPanel({
   onSetRepeat: (repeat: BlockRepeat) => void;
   onMemoSave: (memo: string) => void;
   onTitleSave: (title: string) => void;
+  onColorSave: (color: string) => void;
   onSelectChild: (b: Block) => void;
   onToggleChild: (id: string) => void;
   onAddTimeblockChild: (child: { templateId: string; title: string; color: string; tags: string[]; startH: number; startM: number; endH: number; endM: number }) => void;
@@ -3233,6 +3255,30 @@ function BlockDetailPanel({
               {fmtTime(block.startH, block.startM)} – {fmtTime(block.endH, block.endM)}
             </div>
             <div className="text-[11px] text-muted-foreground mt-0.5">{durMin(block)}분</div>
+          </div>
+        </div>
+
+        {/* Color picker — 프리셋 팔레트 + 사용자 지정 color picker */}
+        <div>
+          <div className="text-[11px] font-medium text-muted-foreground mb-2">색상</div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {BLOCK_COLORS.map(c => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => onColorSave(c)}
+                className={`size-6 rounded-full transition-transform ${block.color.toLowerCase() === c.toLowerCase() ? "ring-2 ring-offset-1 ring-offset-card ring-foreground/40 scale-110" : ""}`}
+                style={{ backgroundColor: c }}
+                title={c}
+              />
+            ))}
+            <input
+              type="color"
+              value={block.color}
+              onChange={e => onColorSave(e.target.value)}
+              className="size-6 rounded cursor-pointer border border-border/50 ml-1 flex-shrink-0"
+              title="사용자 지정 색상"
+            />
           </div>
         </div>
 
