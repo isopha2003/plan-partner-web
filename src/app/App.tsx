@@ -403,11 +403,24 @@ export default function App() {
     emit("timer:state", { timerState, timerSec, pomodoroOn, pomPhase, pomPhaseRemainSec });
   }, [floatWin.isOpen, timerState, timerSec, pomodoroOn, pomPhase, pomPhaseSec, pomWork, pomBreak]);
 
-  // 뜬 타이머 창에서 온 시작/정지 요청 처리 — Supabase 쓰기는 항상 이 메인 창에서만 발생
+  // 뜬 타이머 창에서 온 시작/정지 요청 처리 — DB 쓰기는 항상 이 메인 창에서만 발생.
+  //
+  // 반드시 ref로 최신 startSession/endSession을 참조해야 함.
+  // 예전엔 listen 콜백 안에서 startSession/endSession을 직접 호출했는데, 이 effect의 deps가
+  // []라 마운트 시점의 함수(=마운트 시점의 timerState="stopped"를 클로저로 캡처)가 영구히
+  // 잡혀 있었음. 결과적으로:
+  //  - 뜬 창의 정지 버튼: endSession 안의 `if (timerState !== "running" && ...) return;`가
+  //    캡처된 "stopped"를 보고 항상 early return → 정지 자체가 안 됨.
+  //  - 뜬 창의 시작 버튼: 이미 running 상태여도 startSession의 `if (timerState === "running") return;`
+  //    가드가 캡처된 "stopped"를 보고 통과 → 중복 세션 생성 가능.
+  const startSessionRef = useRef<() => void>();
+  const endSessionRef = useRef<(reason: "manual" | "auto") => void>();
+  startSessionRef.current = startSession;
+  endSessionRef.current = endSession;
   useEffect(() => {
     const unlisten = listen<{ type: "start" | "stop" }>("timer:action", (e) => {
-      if (e.payload.type === "start") startSession();
-      else endSession("manual");
+      if (e.payload.type === "start") startSessionRef.current?.();
+      else endSessionRef.current?.("manual");
     });
     return () => { unlisten.then(fn => fn()); };
   }, []);
@@ -532,22 +545,29 @@ export default function App() {
   const addBlock = (block: Block, options?: { select?: boolean; openInline?: boolean }) => {
     if (options?.select || options?.openInline) {
       insertBlock(block)
-        .then(real => {
+        .then(async real => {
           setBlocks(bs => [...bs, real]);
-          setSelectedBlock(real);
           if (options.openInline) {
-            setJustCreatedBlockId(real.id);
-            // 매칭 템플릿을 즉시 생성해 사이드바에 등록. 이후 onTitleSave에서 사용자가
-            // 제목을 바꾸면 이 템플릿의 이름도 함께 갱신됨(updateTemplateRow).
-            createTemplate({ title: real.title, color: real.color, tags: real.tags ?? [] })
-              .then(tpl => {
-                setTemplates(ts => [...ts, tpl]);
-                // 새 블록에 templateId 연결 — 로컬 상태와 DB 모두 반영.
-                setBlocks(bs => bs.map(b => b.id === real.id ? { ...b, templateId: tpl.id } : b));
-                setSelectedBlock(prev => (prev && prev.id === real.id ? { ...prev, templateId: tpl.id } : prev));
-                patchBlock(real.id, { templateId: tpl.id }).catch(notifyError("템플릿 연결 저장 실패"));
-              })
-              .catch(notifyError("템플릿 자동 생성 실패"));
+            // 매칭 템플릿을 먼저 만들어 templateId까지 붙인 뒤에 상세 패널을 오픈.
+            // 이렇게 하면 사용자가 초 단위로 빠르게 제목을 입력해도, onTitleSave가
+            // 실행되는 시점에 selectedBlock.templateId가 이미 세팅돼 있어서 rename
+            // 브랜치로 들어가고 중복 템플릿이 생성되지 않음.
+            try {
+              const tpl = await createTemplate({ title: real.title, color: real.color, tags: real.tags ?? [] });
+              setTemplates(ts => [...ts, tpl]);
+              const linked = { ...real, templateId: tpl.id };
+              setBlocks(bs => bs.map(b => b.id === real.id ? linked : b));
+              setSelectedBlock(linked);
+              setJustCreatedBlockId(real.id);
+              patchBlock(real.id, { templateId: tpl.id }).catch(notifyError("템플릿 연결 저장 실패"));
+            } catch (e) {
+              // 템플릿 생성이 실패해도 블록 자체는 정상이므로 패널은 그대로 열어줌.
+              notifyError("템플릿 자동 생성 실패")(e);
+              setSelectedBlock(real);
+              setJustCreatedBlockId(real.id);
+            }
+          } else {
+            setSelectedBlock(real);
           }
         })
         .catch(notifyError("블록 추가 실패"));
@@ -658,6 +678,8 @@ export default function App() {
         // 조용히 삼키면 patchBlock만 성공하고 insertBlocksBulk가 실패한 경우 원본에는
         // 반복 규칙이 저장됐지만 인스턴스는 생성되지 않아 사용자가 이유를 알기 어려움.
         notifyError("반복 저장 실패")(e);
+        // 낙관적으로 추가한 temp instance들이 로컬 상태에 유령 블록으로 남지 않도록 DB와 동기화.
+        try { await refetchBlocks(); } catch {}
       }
     })();
   };
@@ -682,7 +704,13 @@ export default function App() {
       .map((tb, i) => ({ ...tb, id: `temp-tpl-${Date.now()}-${i}`, date: targetDate, completed: false }));
     if (!newBlocks.length) return;
     setBlocks(bs => [...bs, ...newBlocks]);
-    insertBlocksBulk(newBlocks).then(() => refetchBlocks()).catch(notifyError("일정 템플릿 적용 실패"));
+    insertBlocksBulk(newBlocks)
+      .then(() => refetchBlocks())
+      .catch(async (e) => {
+        notifyError("일정 템플릿 적용 실패")(e);
+        // 낙관적으로 추가한 temp-tpl 블록이 로컬 상태에 남지 않도록 DB와 동기화.
+        try { await refetchBlocks(); } catch {}
+      });
   };
 
   const deleteScheduleTemplate = (id: string) => {
@@ -3866,7 +3894,6 @@ function BlockDetailPanel({
                   </span>
                   <button
                     onClick={e => { e.stopPropagation(); onDeleteChild(cb.id); }}
-                    title="하위 타임블록 삭제"
                     className="opacity-0 group-hover/child:opacity-100 transition-opacity p-0.5 text-muted-foreground hover:text-destructive flex-shrink-0"
                   >
                     <X size={11} />
