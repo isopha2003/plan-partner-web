@@ -416,11 +416,17 @@ export default function App() {
   // 30초마다 실제 날짜와 비교해서, 바뀌었으면 (1) 실행 중이던 세션을 어제 날짜로 마감하고
   // 실행 중이었다면 오늘 날짜로 새 세션을 이어서 시작 (2) 오늘의 세션/누적시간을 새로 불러옴
   // (3) dayTick을 올려서 TODAY_STR을 직접 참조하는 모든 컴포넌트를 리렌더시킴.
+  //
+  // deps는 빈 배열 — 예전엔 [timerState]라 시작/정지할 때마다 30초 인터벌이 재시작돼서
+  // 자정 근처에 시작/정지가 잦으면 최악 30초 지연 가능성이 있었음. 인터벌은 마운트 시
+  // 한 번만 걸고, 콜백 안에서 필요한 값(timerState)은 ref로 읽음.
   const [, setDayTick] = useState(0);
+  const timerStateRef = useRef(timerState);
+  useEffect(() => { timerStateRef.current = timerState; }, [timerState]);
   useEffect(() => {
     const id = setInterval(async () => {
       if (!syncTodayIfChanged()) return;
-      const wasRunning = timerState === "running";
+      const wasRunning = timerStateRef.current === "running";
       const sid = currentSessionIdRef.current;
       currentSessionIdRef.current = null;
       try {
@@ -439,7 +445,7 @@ export default function App() {
       setDayTick(t => t + 1);
     }, 30000);
     return () => clearInterval(id);
-  }, [timerState]);
+  }, []);
 
   // Calendar UI state
   const [calView, setCalView] = useState<"day" | "week" | "month">("week");
