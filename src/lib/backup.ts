@@ -131,7 +131,7 @@ export async function exportToJson(): Promise<string | null> {
   const suggested = `plan-partner-${tsStamp()}.json`;
   const path = await save({
     defaultPath: suggested,
-    filters: [{ name: "생활 플래너 백업", extensions: ["json"] }],
+    filters: [{ name: "Planory 백업", extensions: ["json"] }],
   });
   if (!path) return null;
   const data = await dumpAllTables();
@@ -149,7 +149,7 @@ export async function exportToJson(): Promise<string | null> {
 export async function importFromJson(): Promise<{ path: string } | null> {
   const picked = await open({
     multiple: false,
-    filters: [{ name: "생활 플래너 백업", extensions: ["json"] }],
+    filters: [{ name: "Planory 백업", extensions: ["json"] }],
   });
   if (!picked || Array.isArray(picked)) return null;
 
@@ -158,7 +158,7 @@ export async function importFromJson(): Promise<{ path: string } | null> {
   try { parsed = JSON.parse(text); }
   catch { throw new Error("JSON 파일을 파싱할 수 없어요."); }
 
-  if (parsed?.schema !== "plan-partner-export") throw new Error("생활 플래너 백업 파일이 아니에요.");
+  if (parsed?.schema !== "plan-partner-export") throw new Error("Planory 백업 파일이 아니에요.");
   if (parsed?.version !== EXPORT_SCHEMA_VERSION) throw new Error(`지원하지 않는 백업 버전(${parsed?.version})이에요.`);
   const tables = parsed?.tables;
   if (!tables || typeof tables !== "object") throw new Error("파일 내용이 손상되었어요.");

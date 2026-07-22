@@ -1,4 +1,4 @@
-# 생활 플래너 (Plan Partner)
+# Planory
 
 시간 블록·마감·뽀모도로·집중 시간 기록·메모까지 한 화면에서 다루는 개인용 Windows/macOS 데스크톱 앱.
 
@@ -22,9 +22,9 @@
 
 | OS | 파일 |
 |----|------|
-| Windows (권장) | `Plan.Partner_x.y.z_x64-setup.exe` |
-| Windows (MSI) | `Plan.Partner_x.y.z_x64_en-US.msi` |
-| macOS | `Plan.Partner_x.y.z_universal.dmg` |
+| Windows (권장) | `Planory_x.y.z_x64-setup.exe` |
+| Windows (MSI) | `Planory_x.y.z_x64_en-US.msi` |
+| macOS | `Planory_x.y.z_universal.dmg` |
 
 설치 후 시작 메뉴 / Launchpad에서 실행. 첫 실행 시 자동 백업 디렉토리와 DB 파일이 생성됩니다.
 

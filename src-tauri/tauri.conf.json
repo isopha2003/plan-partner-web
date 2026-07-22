@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Plan Partner",
+  "productName": "Planory",
   "version": "1.0.0",
   "identifier": "com.isopha.planpartner",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "생활 플래너",
+        "title": "Planory",
         "width": 1280,
         "height": 800,
         "resizable": true,

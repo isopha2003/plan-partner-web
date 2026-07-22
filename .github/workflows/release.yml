@@ -59,7 +59,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "생활 플래너 ${{ github.ref_name }}"
+          releaseName: "Planory ${{ github.ref_name }}"
           releaseBody: "자세한 변경사항은 커밋 로그 참고."
           releaseDraft: false
           prerelease: false

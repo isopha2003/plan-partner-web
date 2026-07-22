@@ -878,13 +878,13 @@ export default function App() {
           const win = getCurrentWindow();
           win.isMaximized().then(m => (m ? win.unmaximize() : win.maximize())).catch(() => {});
         }}
-        className="flex items-stretch h-12 border-b border-border bg-card flex-shrink-0"
+        className="flex items-stretch h-14 border-b border-border bg-card flex-shrink-0"
       >
         {/* Left: 앱 아이덴티티 + 오늘 날짜 */}
         <div data-tauri-drag-region className="flex items-center gap-3 pl-4 pr-3 flex-shrink-0">
           <div data-tauri-drag-region className="flex items-center gap-2 pointer-events-none">
-            <Clock size={13} className="text-primary" />
-            <span className="text-xs font-semibold text-foreground/85">생활 플래너</span>
+            <PlanoryMark size={16} />
+            <span className="text-[13px] font-semibold tracking-tight text-foreground/85">Planory</span>
           </div>
           <span data-tauri-drag-region className="h-4 border-l border-border/70 pointer-events-none hidden sm:block" />
           <span data-tauri-drag-region className="text-[11px] text-muted-foreground pointer-events-none hidden sm:block">
@@ -1152,6 +1152,25 @@ function WindowControls() {
         <X size={14} />
       </button>
     </div>
+  );
+}
+
+// ── Planory 브랜드 마크 ─────────────────────────────────────────────
+// 3-pill 계단 = 오늘까지 쌓여 온 기록(plan+history). 좌상단 앱 아이덴티티와
+// Tauri 패키지 아이콘(src-tauri/icons/planory-source.svg)의 축소판.
+function PlanoryMark({ size = 16 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 512 512"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <rect x="128" y="283" width="200" height="22" rx="11" ry="11" fill="#384B60" />
+      <rect x="156" y="245" width="200" height="22" rx="11" ry="11" fill="#5F8FBF" />
+      <rect x="184" y="207" width="200" height="22" rx="11" ry="11" fill="#BEDAFA" />
+    </svg>
   );
 }
 
