@@ -2417,10 +2417,13 @@ function DeadlinesSection({
                   <button
                     onClick={() => {
                       if (!newTitle.trim()) return;
-                      onAddDeadline({ title: newTitle.trim(), dueDate: newDueDate });
+                      // 날짜 입력을 지운 채 추가하면 dueDate=""가 저장돼 문자열 비교에서
+                      // 무조건 "지난 마감"으로 잡히는 이상 상태가 됨 — 오늘로 폴백.
+                      const due = newDueDate || TODAY_STR;
+                      onAddDeadline({ title: newTitle.trim(), dueDate: due });
                       setNewTitle(""); setShowAdd(false);
                     }}
-                    disabled={!newTitle.trim()}
+                    disabled={!newTitle.trim() || !newDueDate}
                     className="flex-1 text-sm py-2 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 transition-opacity"
                   >
                     추가
