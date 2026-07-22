@@ -129,7 +129,6 @@ const durMin = (b: Block) => (b.endH * 60 + b.endM) - (b.startH * 60 + b.startM)
 const DAYS_KO = ["일", "월", "화", "수", "목", "금", "토"];
 const MONTHS_KO = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
 let TODAY_DATE = parseLocalDate(TODAY_STR);
-let TODAY_LABEL = `${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`;
 
 // 두 음(A5→E6) 상승 chime — Web Audio로 코드에서 직접 생성해 파일/OS 사운드 설정에
 // 의존하지 않고 확실히 재생. 사용자 클릭으로 뽀모도로가 시작된 뒤에만 호출되므로
@@ -176,7 +175,6 @@ function syncTodayIfChanged(): boolean {
   if (real === TODAY_STR) return false;
   TODAY_STR = real;
   TODAY_DATE = parseLocalDate(TODAY_STR);
-  TODAY_LABEL = `${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`;
   return true;
 }
 
@@ -880,16 +878,12 @@ export default function App() {
         }}
         className="flex items-stretch h-14 border-b border-border bg-card flex-shrink-0"
       >
-        {/* Left: 앱 아이덴티티 + 오늘 날짜 */}
+        {/* Left: 앱 아이덴티티 */}
         <div data-tauri-drag-region className="flex items-center gap-3 pl-4 pr-3 flex-shrink-0">
           <div data-tauri-drag-region className="flex items-center gap-2 pointer-events-none">
             <PlanoryMark size={16} />
             <span className="text-[13px] font-semibold tracking-tight text-foreground/85">Planory</span>
           </div>
-          <span data-tauri-drag-region className="h-4 border-l border-border/70 pointer-events-none hidden sm:block" />
-          <span data-tauri-drag-region className="text-[11px] text-muted-foreground pointer-events-none hidden sm:block">
-            {TODAY_LABEL}
-          </span>
         </div>
 
         {/* Center: 타이머 위젯 */}
@@ -908,16 +902,9 @@ export default function App() {
           />
         </div>
 
-        {/* Right: 달성률 요약 + 창 컨트롤(min/max/close). 창 컨트롤은 창 오른쪽 모서리에
-            딱 붙어야 Windows Fitts's law상 클릭이 편하므로 여기서 padding 제거. */}
+        {/* Right: 창 컨트롤(min/max/close). Fitts's law상 오른쪽 모서리에 딱 붙어야 클릭이 편하므로
+            여기엔 padding을 두지 않음. */}
         <div className="flex items-stretch flex-shrink-0">
-          <div data-tauri-drag-region className="flex items-center gap-2.5 pl-3 pr-3">
-            <div data-tauri-drag-region className="text-[11px] text-muted-foreground text-right hidden md:block pointer-events-none">
-              <div>오늘 달성률</div>
-              <div className="font-semibold text-foreground">{completionRate}%</div>
-            </div>
-            <CircleProgress value={completionRate} size={28} strokeWidth={3} />
-          </div>
           <WindowControls />
         </div>
       </header>
@@ -1158,12 +1145,16 @@ function WindowControls() {
 // ── Planory 브랜드 마크 ─────────────────────────────────────────────
 // 3-pill 계단 = 오늘까지 쌓여 온 기록(plan+history). 좌상단 앱 아이덴티티와
 // Tauri 패키지 아이콘(src-tauri/icons/planory-source.svg)의 축소판.
-function PlanoryMark({ size = 16 }: { size?: number }) {
+// 앱 아이콘 원본은 여백이 큰 512×512 타일이라 그대로 작게 그리면 알약이 너무 작게 보임.
+// 헤더에선 타일 배경을 빼고 알약 3개 주변만 잘라낸 뷰박스로 그려서 텍스트 높이에 맞춰
+// 시각적으로 균형 잡히게 함. size는 세로 높이 기준.
+function PlanoryMark({ size = 20 }: { size?: number }) {
+  const contentAspect = 272 / 114;
   return (
     <svg
-      width={size}
+      width={Math.round(size * contentAspect)}
       height={size}
-      viewBox="0 0 512 512"
+      viewBox="120 195 272 114"
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden="true"
     >
@@ -1450,13 +1441,10 @@ function TodaySection({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-xl mx-auto px-8 py-8">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-8">
-          <div>
-            <h2 className="text-3xl font-medium">오늘의 계획</h2>
-            <p className="text-sm text-muted-foreground mt-1">{TODAY_LABEL}</p>
-          </div>
-          <div className="flex items-center gap-3 mt-1">
+        {/* Header — 타이틀/날짜는 사이드바 탭 라벨과 좌상단 로고로 이미 맥락이 잡히므로 생략.
+             달성률 요약만 우측에 남겨서 오늘 진행 상황을 한눈에 볼 수 있게. */}
+        <div className="flex items-start justify-end mb-8">
+          <div className="flex items-center gap-3">
             <div className="text-right">
               <div className="text-[11px] text-muted-foreground">달성률</div>
               <div className="text-2xl font-semibold leading-none mt-0.5">
@@ -2212,7 +2200,6 @@ function CalendarSection({
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0 bg-card/50">
         <div className="flex items-center gap-3">
-          <h2 className="text-base font-semibold">캘린더</h2>
           <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5">
             {(["day","week","month"] as const).map(v => (
               <button key={v} onClick={() => setCalView(v)}
@@ -2441,9 +2428,6 @@ function DeadlinesSection({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-xl mx-auto px-8 py-8">
-        <h2 className="text-3xl font-medium mb-1">마감 작업</h2>
-        <p className="text-sm text-muted-foreground mb-8">시간대 없이 날짜만 지정된 작업 목록</p>
-
         {overdue.length > 0 && (
           <div className="mb-7">
             <div className="flex items-center gap-2 mb-3">
@@ -2682,8 +2666,6 @@ function GrassSection({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto px-8 py-8">
-        <h2 className="text-3xl font-medium mb-8">활동 기록 & 통계</h2>
-
         {/* Stats row */}
         <div className="grid grid-cols-3 gap-4 mb-6">
           {/* Checklist completion */}
@@ -3227,9 +3209,8 @@ function NoteList({
   return (
     <div className="flex-1 overflow-y-auto" onClick={() => setMenuNoteId(null)}>
       <div className="max-w-4xl mx-auto px-8 py-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-3xl font-medium">메모</h2>
+        {/* Header — 타이틀 생략, 도구 버튼(정렬/새 폴더/새 메모)만 우측에 배치 */}
+        <div className="flex items-center justify-end mb-6">
           <div className="flex items-center gap-2">
             {/* 정렬 드롭다운 */}
             <div className="relative">
@@ -3702,9 +3683,6 @@ function SettingsSection({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-lg mx-auto px-8 py-8">
-        <h2 className="text-3xl font-medium mb-2">설정</h2>
-        <p className="text-sm text-muted-foreground mb-8">타이머 · 알림 · 뽀모도로 · 테마 · 데이터 · 업데이트</p>
-
         <div className="space-y-4">
           <div className="p-5 rounded-xl border bg-card">
             <div className="flex items-center justify-between">
