@@ -334,7 +334,17 @@ export default function App() {
     })();
   }, []);
 
+  // 재진입 가드 — 시작/정지 버튼을 rapid-click하거나 메인창/뜬창에서 같은 액션이
+  // 동시에 들어오면 startTimerSession/endTimerSession이 중복 발화해 orphan 세션이
+  // 남거나 currentSessionIdRef를 덮어써 첫 세션을 영구히 놓치는 버그가 있었음.
+  // React setState는 배치되므로 setTimerState 직후에도 다음 호출은 여전히 이전 값을
+  // 보므로, 동기적으로 검사 가능한 ref 게이트로 in-flight를 잠금.
+  const timerActionBusyRef = useRef(false);
+
   const startSession = async () => {
+    if (timerActionBusyRef.current) return;
+    if (timerState === "running") return;
+    timerActionBusyRef.current = true;
     setTimerState("running");
     setPomPhase("focus");
     setPomPhaseSec(0);
@@ -343,19 +353,25 @@ export default function App() {
       currentSessionIdRef.current = session.id;
       setSessions(s => [...s, session]);
     } catch (e) { console.error(e); }
+    finally { timerActionBusyRef.current = false; }
   };
 
   const endSession = async (reason: "manual" | "auto") => {
+    if (timerActionBusyRef.current) return;
+    // running/auto-paused 이외 상태에서 온 정지 요청은 무시(이미 stopped라면 no-op).
+    if (timerState !== "running" && timerState !== "auto-paused") return;
+    timerActionBusyRef.current = true;
     setTimerState(reason === "manual" ? "stopped" : "auto-paused");
     setPomPhase("focus");
     setPomPhaseSec(0);
     const sid = currentSessionIdRef.current;
     currentSessionIdRef.current = null;
-    if (!sid) return;
+    if (!sid) { timerActionBusyRef.current = false; return; }
     try {
       await endTimerSession(sid, reason);
       setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: reason } : x));
     } catch (e) { console.error(e); }
+    finally { timerActionBusyRef.current = false; }
   };
 
   // 오늘 타이머 기록을 통째로 초기화 — 실행 중이면 먼저 정지시키고, Supabase의 오늘 세션들도
