@@ -21,7 +21,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { type TimerState, fmtSec } from "../lib/timer";
 import { runAutoBackupIfNeeded, createBackupNow, getLastBackupTimestamp } from "../lib/backup";
-import { checkForUpdate, installUpdate } from "../lib/updater";
+import { checkForUpdate, installUpdate, type UpdateCheckResult } from "../lib/updater";
 import { notifyError } from "../lib/notify";
 import { Toaster } from "./components/ui/sonner";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -468,35 +468,47 @@ export default function App() {
 
   // 뽀모도로 phase 전환 — 집중이 pomWork분 지나면 자동으로 휴식, 휴식이 pomBreak분 지나면
   // 자동으로 다시 집중. 집중 종료 시 Supabase focus 세션 마감, 휴식 종료 시 새 세션 시작.
+  //
+  // 재진입 가드(pomTransitionBusyRef): endTimerSession/startTimerSession이 1초를 넘기면
+  // 그 사이 tick effect가 pomPhaseSec를 target+1로 밀어 이 effect가 재발화 → 같은 phase에서
+  // 두 번 마감/시작해 orphan 세션이 생기던 문제. React setState는 배치돼서 setPomPhase(0) 직전에
+  // 재실행되면 여전히 이전 phase/pomPhaseSec를 보므로 ref로 동기 게이트.
+  const pomTransitionBusyRef = useRef(false);
   useEffect(() => {
     if (!pomodoroOn || timerState !== "running") return;
     const targetSec = (pomPhase === "focus" ? pomWork : pomBreak) * 60;
     if (pomPhaseSec < targetSec) return;
+    if (pomTransitionBusyRef.current) return;
+    pomTransitionBusyRef.current = true;
 
     (async () => {
-      if (pomPhase === "focus") {
-        const sid = currentSessionIdRef.current;
-        currentSessionIdRef.current = null;
-        if (sid) {
+      try {
+        if (pomPhase === "focus") {
+          const sid = currentSessionIdRef.current;
+          currentSessionIdRef.current = null;
+          if (sid) {
+            try {
+              // 뽀모도로 자동 phase 전환은 사용자 수동 정지가 아니므로 "auto"로 마감.
+              // (히스토리 팝오버가 "manual"(■)로 표시하던 semantic 어긋남을 바로잡음)
+              await endTimerSession(sid, "auto");
+              setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: "auto" } : x));
+            } catch (e) { console.error(e); }
+          }
+          setPomPhase("break");
+          setPomPhaseSec(0);
+          notifyPomodoro("집중 완료", `${pomBreak}분 쉬어요`);
+        } else {
           try {
-            // 뽀모도로 자동 phase 전환은 사용자 수동 정지가 아니므로 "auto"로 마감.
-            // (히스토리 팝오버가 "manual"(■)로 표시하던 semantic 어긋남을 바로잡음)
-            await endTimerSession(sid, "auto");
-            setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: "auto" } : x));
+            const session = await startTimerSession(TODAY_STR);
+            currentSessionIdRef.current = session.id;
+            setSessions(s => [...s, session]);
           } catch (e) { console.error(e); }
+          setPomPhase("focus");
+          setPomPhaseSec(0);
+          notifyPomodoro("휴식 완료", `다시 ${pomWork}분 집중해요`);
         }
-        setPomPhase("break");
-        setPomPhaseSec(0);
-        notifyPomodoro("집중 완료", `${pomBreak}분 쉬어요`);
-      } else {
-        try {
-          const session = await startTimerSession(TODAY_STR);
-          currentSessionIdRef.current = session.id;
-          setSessions(s => [...s, session]);
-        } catch (e) { console.error(e); }
-        setPomPhase("focus");
-        setPomPhaseSec(0);
-        notifyPomodoro("휴식 완료", `다시 ${pomWork}분 집중해요`);
+      } finally {
+        pomTransitionBusyRef.current = false;
       }
     })();
   }, [pomPhaseSec, pomPhase, pomodoroOn, timerState, pomWork, pomBreak]);
@@ -626,7 +638,11 @@ export default function App() {
         await patchBlock(id, { repeat, repeatGroupId: groupId });
         if (instances.length) await insertBlocksBulk(instances);
         await refetchBlocks();
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        // 조용히 삼키면 patchBlock만 성공하고 insertBlocksBulk가 실패한 경우 원본에는
+        // 반복 규칙이 저장됐지만 인스턴스는 생성되지 않아 사용자가 이유를 알기 어려움.
+        notifyError("반복 저장 실패")(e);
+      }
     })();
   };
 
@@ -2374,7 +2390,10 @@ function GrassSection({
     goalMet: boolean;
   } => {
     if (dateStr === TODAY_STR) {
-      const completedBlocks = blocks.filter(b => b.completed);
+      // 오늘 분기도 반드시 date 필터를 함께 걸어야 함. 예전엔 `b.completed`만 걸어서
+      // 지난 몇 달간의 모든 완료 블록이 오늘 셀에 activities로 나오고, activeDays 계산도
+      // 왜곡되던 버그가 있었음.
+      const completedBlocks = blocks.filter(b => b.date === dateStr && b.completed);
       return {
         activities: completedBlocks.map(b => ({ title: b.title, color: b.color })),
         focusMin: focusedMin,
@@ -2412,6 +2431,9 @@ function GrassSection({
     return streak;
   })();
 
+  // "태그별 오늘 현황" 헤더에 맞춰 오늘 블록만 집계. 예전엔 전체 기간을 집계해서
+  // 하루가 지날수록 total이 쌓이고 비율이 실제 오늘 현황과 무관해지던 버그가 있었음.
+  const todaysBlocks = blocks.filter(b => b.date === TODAY_STR);
   const tagStats = [
     { tag: "공부", color: "#5B7EA8" },
     { tag: "개발", color: "#7B5EA7" },
@@ -2419,8 +2441,8 @@ function GrassSection({
     { tag: "운동", color: "#D4622A" },
   ].map(({ tag, color }) => ({
     tag, color,
-    done: blocks.filter(b => b.completed && b.tags.includes(tag)).length,
-    total: blocks.filter(b => b.tags.includes(tag)).length,
+    done: todaysBlocks.filter(b => b.completed && b.tags.includes(tag)).length,
+    total: todaysBlocks.filter(b => b.tags.includes(tag)).length,
   })).filter(t => t.total > 0);
 
   return (
@@ -3344,6 +3366,12 @@ function SettingsSection({
   const [statusVisible, setStatusVisible] = useState(false);
   const flashTimersRef = useRef<number[]>([]);
   const [lastBackupTs, setLastBackupTs] = useState<number | null>(getLastBackupTimestamp());
+  // 사용 가능한 업데이트가 있을 때 확인 카드를 인라인으로 표시 — 예전엔 window.confirm으로
+  // OS-native 다이얼로그를 띄웠지만 앱 톤과 어울리지 않고 OS/WebView에 따라 룩앤필이 달라짐.
+  const [pendingUpdate, setPendingUpdate] = useState<
+    Extract<UpdateCheckResult, { status: "available" }> | null
+  >(null);
+  const [installing, setInstalling] = useState(false);
   const flash = (target: Target, kind: "ok" | "err", text: string) => {
     flashTimersRef.current.forEach(t => window.clearTimeout(t));
     flashTimersRef.current = [];
@@ -3384,9 +3412,8 @@ function SettingsSection({
       if (r.status === "up-to-date") {
         flash("update", "ok", "이미 최신 버전이에요.");
       } else if (r.status === "available") {
-        if (confirm(`새 버전 v${r.next}이(가) 있어요.\n\n${r.notes || "(변경사항 없음)"}\n\n지금 설치하고 재시작할까요?`)) {
-          await installUpdate(r.update);
-        }
+        // 인라인 확인 카드로 전환 — 사용자가 "설치"를 눌러야 실제 다운로드+재시작이 시작됨.
+        setPendingUpdate(r);
       } else {
         flash("update", "err", `업데이트 확인 실패: ${r.error}`);
       }
@@ -3395,6 +3422,18 @@ function SettingsSection({
     } finally {
       setUpdateBusy(false);
       updateBusyRef.current = false;
+    }
+  };
+  const handleInstallUpdate = async () => {
+    if (!pendingUpdate || installing) return;
+    setInstalling(true);
+    try {
+      await installUpdate(pendingUpdate.update);
+      // installUpdate 안에서 relaunch()가 실행되므로 정상 흐름에선 여기 도달 전에 앱이 재시작됨.
+    } catch (e: any) {
+      flash("update", "err", `설치 실패: ${e?.message ?? e}`);
+      setInstalling(false);
+      setPendingUpdate(null);
     }
   };
 
@@ -3502,15 +3541,43 @@ function SettingsSection({
             <div className="flex items-center gap-3">
               <button
                 onClick={handleUpdateCheck}
-                disabled={updateBusy}
+                disabled={updateBusy || installing || !!pendingUpdate}
                 className="flex-shrink-0 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
               >{updateBusy ? "확인 중…" : "업데이트 확인"}</button>
-              {statusMsg?.target === "update" && (
+              {statusMsg?.target === "update" && !pendingUpdate && (
                 <span className={`min-w-0 text-[11px] leading-snug transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
                   {statusMsg.text}
                 </span>
               )}
             </div>
+            {pendingUpdate && (
+              <div className="mt-3 pt-3 border-t border-border space-y-2">
+                <div className="text-xs">
+                  <span className="text-muted-foreground">새 버전</span>{" "}
+                  <span className="font-medium">v{pendingUpdate.next}</span>
+                  {pendingUpdate.current && (
+                    <span className="text-muted-foreground"> (현재 v{pendingUpdate.current})</span>
+                  )}
+                </div>
+                {pendingUpdate.notes && (
+                  <div className="text-[11px] text-muted-foreground whitespace-pre-wrap max-h-32 overflow-y-auto rounded-md bg-muted/40 p-2">
+                    {pendingUpdate.notes}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleInstallUpdate}
+                    disabled={installing}
+                    className="flex-shrink-0 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
+                  >{installing ? "설치 중…" : "지금 설치 후 재시작"}</button>
+                  <button
+                    onClick={() => setPendingUpdate(null)}
+                    disabled={installing}
+                    className="px-3 py-2 rounded-lg text-xs font-medium bg-muted hover:bg-muted/70 text-foreground disabled:opacity-50 transition-colors"
+                  >나중에</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -3971,7 +4038,11 @@ function ChecklistNode({
   depth: number;
   onToggle: (id: string, completed: boolean) => void;
   onDelete: (id: string) => void;
-  onAddChild: (parentItemId: string, text: string) => void;
+  // (text, parentItemId) 순서 — addChecklistItem의 시그니처와 일치시켜야 함.
+  // 예전에 (parentItemId, text)로 잘못 선언돼 있어 addChecklistItem을 그대로 넘기면
+  // 인자 순서가 뒤집혀 text 자리에 부모 UUID, parent_item_id 자리에 사용자 입력이
+  // 들어가 하위 항목이 완전히 깨져 저장되던 버그.
+  onAddChild: (text: string, parentItemId?: string) => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const kids = items.filter(i => i.parentItemId === item.id);
@@ -4005,7 +4076,7 @@ function ChecklistNode({
         <div style={{ marginLeft: 18 }}>
           <NewChecklistItemForm
             autoFocus
-            onAdd={text => { onAddChild(item.id, text); setShowAdd(false); }}
+            onAdd={text => { onAddChild(text, item.id); setShowAdd(false); }}
             onCancel={() => setShowAdd(false)}
           />
         </div>
