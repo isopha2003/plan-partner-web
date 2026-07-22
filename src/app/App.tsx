@@ -22,6 +22,8 @@ import remarkGfm from "remark-gfm";
 import { type TimerState, fmtSec } from "../lib/timer";
 import { runAutoBackupIfNeeded, createBackupNow, getLastBackupTimestamp } from "../lib/backup";
 import { checkForUpdate, installUpdate } from "../lib/updater";
+import { notifyError } from "../lib/notify";
+import { Toaster } from "./components/ui/sonner";
 import { emit, listen } from "@tauri-apps/api/event";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useTimerWindow } from "./useTimerWindow";
@@ -440,7 +442,7 @@ export default function App() {
     if (!target) return;
     const completed = !target.completed;
     setBlocks(bs => bs.map(b => b.id === id ? { ...b, completed } : b));
-    patchBlock(id, { completed }).catch(console.error);
+    patchBlock(id, { completed }).catch(notifyError("완료 상태 저장 실패"));
   };
 
   // Optimistic insert: shows instantly with a temp id, then swapped for the real DB row.
@@ -456,14 +458,14 @@ export default function App() {
           setSelectedBlock(real);
           if (options.openInline) setJustCreatedBlockId(real.id);
         })
-        .catch(console.error);
+        .catch(notifyError("블록 추가 실패"));
       return;
     }
     const tempId = `temp-${Date.now()}`;
     setBlocks(bs => [...bs, { ...block, id: tempId }]);
     insertBlock(block)
       .then(real => setBlocks(bs => bs.map(b => (b.id === tempId ? real : b))))
-      .catch(e => { console.error(e); setBlocks(bs => bs.filter(b => b.id !== tempId)); });
+      .catch(e => { setBlocks(bs => bs.filter(b => b.id !== tempId)); notifyError("블록 추가 실패")(e); });
   };
 
   // Local-only update — used for high-frequency visual feedback (e.g. resize drag) where
@@ -473,13 +475,13 @@ export default function App() {
 
   const updateBlock = (id: string, changes: Partial<Block>) => {
     updateBlockLocal(id, changes);
-    patchBlock(id, changes).catch(console.error);
+    patchBlock(id, changes).catch(notifyError("블록 저장 실패"));
   };
 
   const deleteBlock = (id: string) => {
     setBlocks(bs => bs.filter(b => b.id !== id));
     setSelectedBlock(prev => prev?.id === id ? null : prev);
-    deleteBlockRow(id).catch(console.error);
+    deleteBlockRow(id).catch(notifyError("블록 삭제 실패"));
   };
 
   const deleteRepeatGroup = (id: string, fromDate: string) => {
@@ -487,10 +489,10 @@ export default function App() {
     const groupId = block?.repeatGroupId;
     if (!groupId) {
       setBlocks(bs => bs.filter(b => b.id !== id));
-      deleteBlockRow(id).catch(console.error);
+      deleteBlockRow(id).catch(notifyError("블록 삭제 실패"));
     } else {
       setBlocks(bs => bs.filter(b => !(b.repeatGroupId === groupId && b.date >= fromDate)));
-      apiDeleteRepeatGroup(groupId, fromDate).catch(console.error);
+      apiDeleteRepeatGroup(groupId, fromDate).catch(notifyError("반복 블록 삭제 실패"));
     }
     setSelectedBlock(null);
   };
@@ -579,12 +581,12 @@ export default function App() {
       .map((tb, i) => ({ ...tb, id: `temp-tpl-${Date.now()}-${i}`, date: targetDate, completed: false }));
     if (!newBlocks.length) return;
     setBlocks(bs => [...bs, ...newBlocks]);
-    insertBlocksBulk(newBlocks).then(() => refetchBlocks()).catch(console.error);
+    insertBlocksBulk(newBlocks).then(() => refetchBlocks()).catch(notifyError("일정 템플릿 적용 실패"));
   };
 
   const deleteScheduleTemplate = (id: string) => {
     setScheduleTemplates(ts => ts.filter(t => t.id !== id));
-    deleteScheduleTemplateRow(id).catch(console.error);
+    deleteScheduleTemplateRow(id).catch(notifyError("일정 템플릿 삭제 실패"));
   };
 
   const toggleDeadline = (id: string) => {
@@ -592,12 +594,12 @@ export default function App() {
     if (!target) return;
     const completed = !target.completed;
     setDeadlines(ds => ds.map(d => d.id === id ? { ...d, completed } : d));
-    toggleDeadlineRow(id, completed).catch(console.error);
+    toggleDeadlineRow(id, completed).catch(notifyError("마감 저장 실패"));
   };
 
   const deleteDeadline = (id: string) => {
     setDeadlines(ds => ds.filter(d => d.id !== id));
-    deleteDeadlineRow(id).catch(console.error);
+    deleteDeadlineRow(id).catch(notifyError("마감 삭제 실패"));
   };
 
   const addTemplate = (t: { title: string; color: string; tags: string[] }) => {
@@ -605,14 +607,14 @@ export default function App() {
     setTemplates(ts => [...ts, { id: tempId, ...t }]);
     createTemplate(t)
       .then(real => setTemplates(ts => ts.map(x => (x.id === tempId ? real : x))))
-      .catch(e => { console.error(e); setTemplates(ts => ts.filter(x => x.id !== tempId)); });
+      .catch(e => { setTemplates(ts => ts.filter(x => x.id !== tempId)); notifyError("블록 템플릿 추가 실패")(e); });
   };
 
   // 템플릿 삭제 — 이미 이 템플릿으로 만들어진 블록은 그대로 두고 template_id만 NULL로 끊김.
   const deleteTemplate = (id: string) => {
     setTemplates(ts => ts.filter(x => x.id !== id));
     setBlocks(bs => bs.map(b => b.templateId === id ? { ...b, templateId: undefined } : b));
-    deleteTemplateRow(id).catch(console.error);
+    deleteTemplateRow(id).catch(notifyError("블록 템플릿 삭제 실패"));
   };
 
   const addDeadline = (d: { title: string; dueDate: string }) => {
@@ -620,7 +622,7 @@ export default function App() {
     setDeadlines(ds => [...ds, { id: tempId, title: d.title, dueDate: d.dueDate, completed: false }]);
     createDeadline(d)
       .then(real => setDeadlines(ds => ds.map(x => (x.id === tempId ? real : x))))
-      .catch(e => { console.error(e); setDeadlines(ds => ds.filter(x => x.id !== tempId)); });
+      .catch(e => { setDeadlines(ds => ds.filter(x => x.id !== tempId)); notifyError("마감 추가 실패")(e); });
   };
 
   const todayBlocks = blocks.filter(b => b.date === TODAY_STR && !b.parentBlockId);
@@ -821,7 +823,7 @@ export default function App() {
                     updateBlock(selectedBlock.id, { templateId: tpl.id });
                     setSelectedBlock(prev => (prev && prev.id === selectedBlock.id ? { ...prev, templateId: tpl.id } : prev));
                   })
-                  .catch(console.error);
+                  .catch(notifyError("템플릿 자동 생성 실패"));
               }
               if (wasJustCreated) setJustCreatedBlockId(prev => (prev === selectedBlock.id ? null : prev));
             }}
@@ -849,6 +851,7 @@ export default function App() {
         )}
       </div>
       <AppTooltipRoot />
+      <Toaster position="bottom-right" duration={4000} />
     </div>
   );
 }
@@ -2855,26 +2858,26 @@ function NoteList({
 
   const handleMoveNote = async (noteId: string, folderId: string | null) => {
     setNotes(ns => ns.map(n => n.id === noteId ? { ...n, folderId } : n));
-    try { await moveNoteToFolder(noteId, folderId); } catch (e) { console.error(e); }
+    try { await moveNoteToFolder(noteId, folderId); } catch (e) { notifyError("메모 이동 실패")(e); }
     setMenuNoteId(null);
   };
 
   const handleDeleteNote = async (noteId: string) => {
     setNotes(ns => ns.filter(n => n.id !== noteId));
-    try { await deleteNote(noteId); } catch (e) { console.error(e); }
+    try { await deleteNote(noteId); } catch (e) { notifyError("메모 삭제 실패")(e); }
     setMenuNoteId(null);
   };
 
   const handleCreateFolder = async () => {
     const name = newFolderName.trim();
     if (!name) return;
-    try { await createFolder({ name, color: newFolderColor }); await refreshFolders(); } catch (e) { console.error(e); }
+    try { await createFolder({ name, color: newFolderColor }); await refreshFolders(); } catch (e) { notifyError("폴더 만들기 실패")(e); }
     setNewFolderName(""); setNewFolderColor(FOLDER_COLORS[0]); setShowNewFolder(false);
   };
 
   const handleDeleteFolder = async (folderId: string) => {
     if (activeFolderId === folderId) setActiveFolderId("all");
-    try { await deleteFolder(folderId); await Promise.all([refreshFolders(), refreshNotes()]); } catch (e) { console.error(e); }
+    try { await deleteFolder(folderId); await Promise.all([refreshFolders(), refreshNotes()]); } catch (e) { notifyError("폴더 삭제 실패")(e); }
   };
 
   // 노트 카드 간 드래그로 재정렬 — 정렬 모드가 custom이 아니면 custom으로 전환
@@ -2890,7 +2893,7 @@ function NoteList({
     const finalOrder = [...ids, ...rest];
     setSortMode("custom");
     setNotes(ns => [...ns].sort((a, b) => finalOrder.indexOf(a.id) - finalOrder.indexOf(b.id)).map((n, i) => ({ ...n, sortOrder: i })));
-    try { await reorderNotes(finalOrder); } catch (e) { console.error(e); }
+    try { await reorderNotes(finalOrder); } catch (e) { notifyError("메모 순서 저장 실패")(e); }
   };
 
   return (
@@ -3174,7 +3177,7 @@ function NoteEditor({
         await updateNote(note.id, { title, content, category, folderId });
         onChangeLocal({ title, content, category, folderId });
         setSaveState("saved");
-      } catch (e) { console.error(e); setSaveState("idle"); }
+      } catch (e) { setSaveState("idle"); notifyError("메모 저장 실패")(e); }
     }, 700);
     return () => clearTimeout(t);
   }, [title, content, category, folderId]);
@@ -3490,18 +3493,18 @@ function BlockDetailPanel({
   // 이 블록의 데이터만 다룸.
   const [items, setItems] = useState<ChecklistItemT[]>([]);
   useEffect(() => {
-    fetchChecklistItems(block.id).then(setItems).catch(console.error);
+    fetchChecklistItems(block.id).then(setItems).catch(notifyError("체크리스트 불러오기 실패"));
   }, [block.id]);
 
   const addChecklistItem = async (text: string, parentItemId?: string) => {
     try {
       const created = await createChecklistItem(block.id, text, parentItemId);
       setItems(is => [...is, created]);
-    } catch (e) { console.error(e); }
+    } catch (e) { notifyError("체크리스트 항목 추가 실패")(e); }
   };
   const toggleChecklistItem = async (id: string, completed: boolean) => {
     setItems(is => is.map(i => i.id === id ? { ...i, completed } : i));
-    try { await toggleChecklistItemRow(id, completed); } catch (e) { console.error(e); }
+    try { await toggleChecklistItemRow(id, completed); } catch (e) { notifyError("체크리스트 저장 실패")(e); }
   };
   const deleteChecklistItem = async (id: string) => {
     // DB의 FK가 ON DELETE CASCADE라 하위 항목도 서버에서 같이 지워짐 — 로컬 상태도 같이 정리
@@ -3514,7 +3517,7 @@ function BlockDetailPanel({
       }
     }
     setItems(is => is.filter(i => !toRemove.has(i.id)));
-    try { await deleteChecklistItemRow(id); } catch (e) { console.error(e); }
+    try { await deleteChecklistItemRow(id); } catch (e) { notifyError("체크리스트 삭제 실패")(e); }
   };
 
   // 독립 타임블록형 자식 추가 폼 — 부모→자식 1단계 제약이라 이 블록 자신이 이미 자식인 경우
