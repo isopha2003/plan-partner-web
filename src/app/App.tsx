@@ -407,7 +407,11 @@ export default function App() {
     setTimerSec(0);
     try {
       await deleteTodaySessions(TODAY_STR);
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      // 조용히 삼키면 로컬 UI는 초기화된 것처럼 보이지만 DB에는 오늘 세션이 그대로 남아
+      // 다음 실행 시 되살아남. 사용자에게 알려서 재시도 유도.
+      notifyError("타이머 기록 초기화 실패")(e);
+    }
   };
 
   // 타이머 시작/정지는 오직 사용자가 버튼을 눌러서만 발생 — 창 포커스 등 자동 트리거 없음
@@ -476,7 +480,11 @@ export default function App() {
         setTimerSec(0);
         // 어제 세션이 방금 마감돼 어제 집중 시간이 확정됐으니 히트맵 값도 갱신
         setFocusSecByDate(await fetchFocusSecByDate());
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        // 자정 롤오버 중 DB 오류가 나면 세션이 날짜 경계에 걸린 채 남고 집중 통계가
+        // 어긋나므로 사용자에게 알림.
+        notifyError("자정 롤오버 처리 실패")(e);
+      }
       setDayTick(t => t + 1);
     }, 30000);
     return () => clearInterval(id);
@@ -976,8 +984,17 @@ export default function App() {
               setSelectedBlock({ ...selectedBlock, memo });
             }}
             onColorSave={(color) => {
+              const wasJustCreated = selectedBlock.id === justCreatedBlockId;
               updateBlock(selectedBlock.id, { color });
               setSelectedBlock({ ...selectedBlock, color });
+              // 방금 만든 블록의 자동 템플릿은 아직 사용자가 다듬는 중이므로 색도 함께 동기화.
+              // 안 그러면 유저가 색을 바꿔도 사이드바 템플릿은 원본 색이라 나중에 드래그하면
+              // 자기가 지정한 색이 아닌 원본 색으로 블록이 생성돼 헷갈림.
+              if (wasJustCreated && selectedBlock.templateId) {
+                const tplId = selectedBlock.templateId;
+                setTemplates(ts => ts.map(t => t.id === tplId ? { ...t, color } : t));
+                updateTemplateRow(tplId, { color }).catch(notifyError("템플릿 색 저장 실패"));
+              }
             }}
             paletteColors={paletteColors}
             onAddPaletteColor={addPaletteColor}
@@ -2966,7 +2983,7 @@ function MemoSection() {
       const n = await createNote({ title: "", content: "" });
       setNotes(ns => [n, ...ns]);
       setEditingId(n.id);
-    } catch (e) { console.error(e); }
+    } catch (e) { notifyError("새 메모 만들기 실패")(e); }
   };
 
   if (!loaded) {
