@@ -479,8 +479,10 @@ export default function App() {
         currentSessionIdRef.current = null;
         if (sid) {
           try {
-            await endTimerSession(sid, "manual");
-            setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: "manual" } : x));
+            // 뽀모도로 자동 phase 전환은 사용자 수동 정지가 아니므로 "auto"로 마감.
+            // (히스토리 팝오버가 "manual"(■)로 표시하던 semantic 어긋남을 바로잡음)
+            await endTimerSession(sid, "auto");
+            setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: "auto" } : x));
           } catch (e) { console.error(e); }
         }
         setPomPhase("break");
