@@ -365,6 +365,9 @@ export interface Note {
   category: string;
   folderId: string | null;
   sortOrder: number;
+  // "새 메모" 직후 아직 사용자가 "저장" 버튼으로 확정하지 않은 상태 = draft.
+  // draft 노트는 임시 저장 탭에서만 노출되고, 일반 리스트/폴더 뷰에선 숨김.
+  isDraft: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -377,6 +380,7 @@ function rowToNote(r: any): Note {
     category: r.category ?? "",
     folderId: r.folder_id ?? null,
     sortOrder: r.sort_order ?? 0,
+    isDraft: !!r.is_draft,
     createdAt: r.created_at ?? r.updated_at ?? "",
     updatedAt: r.updated_at ?? "",
   };
@@ -388,22 +392,25 @@ export async function fetchNotes(): Promise<Note[]> {
   return rows.map(rowToNote);
 }
 
-export async function createNote(n: { title?: string; content?: string; category?: string; folderId?: string | null }): Promise<Note> {
+export async function createNote(n: { title?: string; content?: string; category?: string; folderId?: string | null; isDraft?: boolean }): Promise<Note> {
   const db = await getDb();
   const id = uuid();
   const now = new Date().toISOString();
   // 새 노트는 맨 앞(sort_order 최소값 - 1)에 놓아 리스트 상단에 뜨게 함
   const rows = await db.select<any[]>("SELECT MIN(sort_order) AS m FROM notes");
   const sortOrder = (rows[0]?.m ?? 0) - 1;
+  // "새 메모" UI에서 오는 노트는 기본적으로 draft(=사용자가 아직 저장 확정 안 함).
+  // 명시적으로 isDraft:false를 넘긴 경우(예: 다른 경로로 즉시 확정 저장)만 non-draft.
+  const isDraft = n.isDraft !== false;
   await db.execute(
-    `INSERT INTO notes (id, title, content, category, folder_id, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, n.title ?? "", n.content ?? "", n.category ?? "", n.folderId ?? null, sortOrder, now, now]
+    `INSERT INTO notes (id, title, content, category, folder_id, sort_order, is_draft, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, n.title ?? "", n.content ?? "", n.category ?? "", n.folderId ?? null, sortOrder, isDraft ? 1 : 0, now, now]
   );
-  return { id, title: n.title ?? "", content: n.content ?? "", category: n.category ?? "", folderId: n.folderId ?? null, sortOrder, createdAt: now, updatedAt: now };
+  return { id, title: n.title ?? "", content: n.content ?? "", category: n.category ?? "", folderId: n.folderId ?? null, sortOrder, isDraft, createdAt: now, updatedAt: now };
 }
 
-export async function updateNote(id: string, changes: { title?: string; content?: string; category?: string; folderId?: string | null }): Promise<void> {
+export async function updateNote(id: string, changes: { title?: string; content?: string; category?: string; folderId?: string | null; isDraft?: boolean }): Promise<void> {
   const db = await getDb();
   const sets: string[] = [];
   const vals: any[] = [];
@@ -412,6 +419,7 @@ export async function updateNote(id: string, changes: { title?: string; content?
   if (changes.content !== undefined) push("content", changes.content);
   if (changes.category !== undefined) push("category", changes.category);
   if (changes.folderId !== undefined) push("folder_id", changes.folderId ?? null);
+  if (changes.isDraft !== undefined) push("is_draft", changes.isDraft ? 1 : 0);
   push("updated_at", new Date().toISOString());
   vals.push(id);
   await db.execute(`UPDATE notes SET ${sets.join(", ")} WHERE id = ?`, vals);

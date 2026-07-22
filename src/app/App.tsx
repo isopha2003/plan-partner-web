@@ -3135,9 +3135,10 @@ function NoteList({
   const [sortMode, setSortMode] = useState<SortMode>("custom");
   const [sortOpen, setSortOpen] = useState(false);
   // viewFolderId: null이면 루트 뷰(폴더 카드 + 폴더 없는 노트), 폴더 id면 그 폴더의 노트만 노출.
+  // "drafts" 센티널은 임시 저장 탭 — 아직 사용자가 "저장" 버튼으로 확정하지 않은 노트만 노출.
   // 예전엔 "전체 / 폴더 없음 / 각 폴더" 필터 칩 바가 있었는데, 폴더 자체를 리스트 아이템으로
   // 두고 클릭으로 진입하는 파일탐색기 스타일이 더 직관적이라 그렇게 재설계.
-  const [viewFolderId, setViewFolderId] = useState<string | null>(null);
+  const [viewFolderId, setViewFolderId] = useState<string | null | "drafts">(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [menuNoteId, setMenuNoteId] = useState<string | null>(null);
   const [showNewFolder, setShowNewFolder] = useState(false);
@@ -3148,11 +3149,18 @@ function NoteList({
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
 
   const categories = Array.from(new Set(notes.map(n => n.category).filter(Boolean)));
-  const currentFolder = viewFolderId ? folders.find(f => f.id === viewFolderId) ?? null : null;
+  const inDrafts = viewFolderId === "drafts";
+  const currentFolder = !inDrafts && viewFolderId ? folders.find(f => f.id === viewFolderId) ?? null : null;
+  const draftCount = notes.filter(n => n.isDraft).length;
 
-  // 필터: 현재 뷰(루트=null 또는 특정 폴더)의 노트만 노출.
+  // 필터: 임시 저장 탭에선 draft만, 그 외에선 draft를 숨기고 현재 뷰(루트=null 또는 폴더)에 속한 노트만.
   let shown = notes.filter(n => {
-    if (n.folderId !== viewFolderId) return false;
+    if (inDrafts) {
+      if (!n.isDraft) return false;
+    } else {
+      if (n.isDraft) return false;
+      if (n.folderId !== viewFolderId) return false;
+    }
     if (activeCategory && n.category !== activeCategory) return false;
     return true;
   });
@@ -3250,6 +3258,24 @@ function NoteList({
             >
               <Plus size={13} /> 새 메모
             </button>
+            {/* 임시 저장 탭 — 뒤로가기(자동 저장)로 남긴 미확정 노트만 모아 봄.
+                 활성화되어 있으면 primary 톤으로 강조해 현재 뷰가 임시 저장 뷰임을 표시. */}
+            <button
+              onClick={() => setViewFolderId(inDrafts ? null : "drafts")}
+              title={inDrafts ? "임시 저장 나가기" : "임시 저장 메모 보기"}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                inDrafts
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border bg-card hover:bg-muted"
+              }`}
+            >
+              <FileText size={13} /> 임시 저장
+              {draftCount > 0 && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                  inDrafts ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                }`}>{draftCount}</span>
+              )}
+            </button>
           </div>
         </div>
 
@@ -3281,27 +3307,35 @@ function NoteList({
           </div>
         )}
 
-        {/* 폴더 안에 들어와 있으면 뒤로가기 헤더 노출. 뒤로가기 버튼은 노트를 드래그해서
-             드롭하면 루트로 꺼내는 드롭 타깃 역할도 겸함 — 폴더에서 밖으로 옮길 때 컨텍스트
-             메뉴를 굳이 안 열어도 되도록. */}
-        {currentFolder && (
+        {/* 폴더 안이나 임시 저장 뷰면 뒤로가기 헤더 노출. 폴더 뷰의 뒤로가기 버튼은
+             노트를 드래그해 드롭하면 루트(폴더 없음)로 꺼내는 드롭 타깃 역할도 겸함.
+             임시 저장 뷰의 뒤로가기 버튼은 폴더 이동과 무관하므로 드롭 타깃은 아님. */}
+        {(currentFolder || inDrafts) && (
           <div className="mb-4 flex items-center gap-2">
             <button
               onClick={() => setViewFolderId(null)}
-              onDragOver={e => { if (dragNoteId) { e.preventDefault(); setDropFolderId("back"); } }}
-              onDragLeave={() => setDropFolderId(null)}
-              onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData("noteId"); if (id) handleMoveNote(id, null); setDropFolderId(null); setViewFolderId(null); }}
+              onDragOver={currentFolder ? e => { if (dragNoteId) { e.preventDefault(); setDropFolderId("back"); } } : undefined}
+              onDragLeave={currentFolder ? () => setDropFolderId(null) : undefined}
+              onDrop={currentFolder ? e => { e.preventDefault(); const id = e.dataTransfer.getData("noteId"); if (id) handleMoveNote(id, null); setDropFolderId(null); setViewFolderId(null); } : undefined}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs transition-colors ${
                 dropFolderId === "back" ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-border bg-card hover:bg-muted"
               }`}
             >
               <ArrowLeft size={13} /> 뒤로
             </button>
-            <div className="flex items-center gap-1.5 text-sm">
-              <span className="size-2.5 rounded-full" style={{ backgroundColor: currentFolder.color }} />
-              <span className="font-medium">{currentFolder.name}</span>
-              <span className="text-[11px] text-muted-foreground">{shown.length}</span>
-            </div>
+            {inDrafts ? (
+              <div className="flex items-center gap-1.5 text-sm">
+                <FileText size={14} className="text-muted-foreground" />
+                <span className="font-medium">임시 저장</span>
+                <span className="text-[11px] text-muted-foreground">{shown.length}</span>
+              </div>
+            ) : currentFolder && (
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="size-2.5 rounded-full" style={{ backgroundColor: currentFolder.color }} />
+                <span className="font-medium">{currentFolder.name}</span>
+                <span className="text-[11px] text-muted-foreground">{shown.length}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -3323,11 +3357,13 @@ function NoteList({
           </div>
         )}
 
-        {/* 목록: 루트 뷰에선 폴더 카드가 노트 위에 먼저 나오고, 폴더 안에선 노트만.
+        {/* 목록: 루트 뷰에선 폴더 카드가 노트 위에 먼저 나오고, 폴더/임시 저장 안에선 노트만.
              폴더 카드에 노트를 드래그하면 그 폴더로 이동. */}
         {shown.length === 0 && (viewFolderId !== null || folders.length === 0) ? (
           <div className="text-center py-16 text-sm text-muted-foreground">
-            {notes.length === 0 && folders.length === 0
+            {inDrafts
+              ? "임시 저장된 메모가 없어요. \"새 메모\"로 만든 뒤 \"저장\"을 누르지 않고 나가면 여기 모여요."
+              : notes.filter(n => !n.isDraft).length === 0 && folders.length === 0
               ? "아직 메모가 없어요. \"새 메모\"로 첫 메모를 만들어보세요."
               : viewFolderId !== null
               ? "이 폴더에는 아직 메모가 없어요. 다른 메모를 여기로 드래그해 옮길 수 있어요."
@@ -3516,20 +3552,20 @@ function NoteEditor({
     return () => clearTimeout(t);
   }, [title, content, category, folderId]);
 
-  // 저장 버튼 — 대기 중인 debounce 패치를 즉시 flush 하고 목록으로 복귀.
+  // 저장 버튼 — 대기 중인 debounce 패치를 즉시 flush + isDraft:false 로 확정하고 목록으로 복귀.
+  // draft 노트는 임시 저장 탭에서만 보이므로, 저장 버튼을 눌러야 일반 리스트/폴더 뷰에 등장.
+  // 자동 저장 debounce는 isDraft 필드를 건드리지 않으므로 뒤로가기(자동저장)만 하면 draft로 유지.
   const handleSave = async () => {
     setSaving(true);
-    const patch = pendingPatchRef.current;
-    if (patch) {
-      try {
-        await updateNote(note.id, patch);
-        pendingPatchRef.current = null;
-        onChangeLocal(patch);
-      } catch (e) {
-        setSaving(false);
-        notifyError("메모 저장 실패")(e);
-        return;
-      }
+    const savePatch = { ...(pendingPatchRef.current ?? {}), isDraft: false };
+    try {
+      await updateNote(note.id, savePatch);
+      pendingPatchRef.current = null;
+      onChangeLocal(savePatch);
+    } catch (e) {
+      setSaving(false);
+      notifyError("메모 저장 실패")(e);
+      return;
     }
     setSaving(false);
     onBack();

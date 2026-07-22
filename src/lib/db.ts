@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS note_folders (
 
 -- 자유 메모 — 제목 + 마크다운 내용 + 자유 텍스트 카테고리 + 소속 폴더.
 -- sort_order로 사용자 지정 순서 저장(정렬 모드가 custom일 때 사용).
+-- is_draft: "새 메모"로 만들어져 아직 사용자가 "저장" 버튼으로 확정하지 않은 상태.
+-- 뒤로가기(자동저장)로 나가면 draft로 남아 별도 "임시 저장" 탭에서만 노출.
 CREATE TABLE IF NOT EXISTS notes (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL DEFAULT '',
@@ -91,6 +93,7 @@ CREATE TABLE IF NOT EXISTS notes (
   category TEXT NOT NULL DEFAULT '',
   folder_id TEXT REFERENCES note_folders(id) ON DELETE SET NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
+  is_draft INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -112,6 +115,7 @@ const NOTE_UPGRADES = [
   "ALTER TABLE notes ADD COLUMN folder_id TEXT",
   "ALTER TABLE notes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE notes ADD COLUMN created_at TEXT",
+  "ALTER TABLE notes ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0",
 ];
 
 let dbPromise: Promise<Database> | null = null;

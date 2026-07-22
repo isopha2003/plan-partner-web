@@ -43,7 +43,7 @@ const TABLE_COLUMNS: Record<TableName, readonly string[]> = {
   deadlines:       ["id", "title", "due_date", "completed", "completed_at", "created_at"],
   schedule_templates: ["id", "name", "blocks", "created_at"],
   timer_sessions:  ["id", "date", "started_at", "ended_at", "end_reason", "created_at"],
-  notes:           ["id", "title", "content", "category", "folder_id", "sort_order", "created_at", "updated_at"],
+  notes:           ["id", "title", "content", "category", "folder_id", "sort_order", "is_draft", "created_at", "updated_at"],
 };
 
 // 백업 파일명 타임스탬프. ms 까지 붙여 같은 초 안에 두 번 눌러도 파일명이 겹치지 않게.
