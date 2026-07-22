@@ -878,17 +878,20 @@ export default function App() {
         }}
         className="flex items-stretch h-14 border-b border-border bg-card flex-shrink-0"
       >
+        {/* 좌우 flex-1로 균등 폭을 잡고 가운데 GlobalTimer는 별도 컨테이너에 두어야
+             타이머가 창 정중앙에 온다. 예전엔 달성률 배지를 중앙 컨테이너 안에 함께 뒀는데
+             그러면 두 개가 묶여서 중앙에 정렬돼 타이머가 왼쪽으로 밀려 보였음. */}
+
         {/* Left: 앱 아이덴티티 */}
-        <div data-tauri-drag-region className="flex items-center gap-3 pl-4 pr-3 flex-shrink-0">
+        <div data-tauri-drag-region className="flex-1 flex items-center gap-3 pl-4 pr-3 min-w-0">
           <div data-tauri-drag-region className="flex items-center gap-2 pointer-events-none">
             <PlanoryMark size={16} />
             <span className="text-[13px] font-semibold tracking-tight text-foreground/85">Planory</span>
           </div>
         </div>
 
-        {/* Center: 타이머 위젯 + 컴팩트 달성률 배지.
-             달성률은 원래 오른쪽 별도 블록에 있었는데 타이머 옆으로 옮겨 시선 이동을 줄임. */}
-        <div className="flex-1 flex items-center justify-center gap-2 min-w-0">
+        {/* Center: 타이머만 배치 — 정중앙 유지 */}
+        <div className="flex items-center flex-shrink-0">
           <GlobalTimer
             timerState={timerState}
             timerSec={timerSec}
@@ -901,18 +904,18 @@ export default function App() {
             pomPhaseRemainSec={Math.max(0, (pomPhase === "focus" ? pomWork : pomBreak) * 60 - pomPhaseSec)}
             floatWin={floatWin}
           />
-          <div
-            title="오늘 달성률"
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-muted/40 border border-border"
-          >
-            <CircleProgress value={completionRate} size={16} strokeWidth={2.5} />
-            <span className="text-[11px] font-medium tabular-nums text-foreground/85">{completionRate}%</span>
-          </div>
         </div>
 
-        {/* Right: 창 컨트롤(min/max/close). Fitts's law상 오른쪽 모서리에 딱 붙어야 클릭이 편하므로
-            여기엔 padding을 두지 않음. */}
-        <div className="flex items-stretch flex-shrink-0">
+        {/* Right: 달성률 배지 + 창 컨트롤(min/max/close). Fitts's law상 창 컨트롤이 오른쪽
+             모서리에 딱 붙어야 클릭이 편하므로 우측 컨테이너 자체엔 padding을 두지 않음. */}
+        <div data-tauri-drag-region className="flex-1 flex items-stretch items-center justify-end min-w-0">
+          <div data-tauri-drag-region className="flex items-center gap-2 px-3 pointer-events-none">
+            <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg border border-border/80 bg-background/70 pointer-events-auto">
+              <span className="text-[11px] text-muted-foreground whitespace-nowrap">오늘 달성률</span>
+              <span className="text-[11px] font-semibold tabular-nums text-foreground">{completionRate}%</span>
+              <CircleProgress value={completionRate} size={16} strokeWidth={2.5} />
+            </div>
+          </div>
           <WindowControls />
         </div>
       </header>
@@ -3487,17 +3490,20 @@ function NoteEditor({
   const [content, setContent] = useState(note.content);
   const [category, setCategory] = useState(note.category);
   const [folderId, setFolderId] = useState<string | null>(note.folderId);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("saved");
+  // 예전엔 "저장됨/저장 중…" 상태 텍스트를 노출했는데, 사용자 입장에선 완료했다는 명확한
+  // 액션(버튼)이 있는 편이 더 안심됨. 자동 저장(debounce)은 안전망으로 유지하고 상단엔
+  // 저장 버튼을 대신 배치 — 버튼을 누르면 pending debounce를 즉시 flush하고 목록으로 복귀.
+  const [saving, setSaving] = useState(false);
   const first = useRef(true);
   // 아직 debounce 대기 중인 미저장 변경을 추적. 사용자가 debounce 안 끝난 상태에서
   // 뒤로가기를 누르면 아래 unmount cleanup이 이걸 즉시 flush해서 데이터 유실을 막음.
   // 예전엔 debounce cleanup(clearTimeout)만 있어서 마지막 몇 초 입력이 그대로 날아감.
   const pendingPatchRef = useRef<{ title: string; content: string; category: string; folderId: string | null } | null>(null);
 
-  // 700ms debounce 자동 저장
+  // 700ms debounce 자동 저장 (안전망). 상태 표시는 하지 않고, 성공/실패 결과는 저장 버튼과
+  // 언마운트 flush에서만 사용자에게 보임.
   useEffect(() => {
     if (first.current) { first.current = false; return; }
-    setSaveState("saving");
     const patch = { title, content, category, folderId };
     pendingPatchRef.current = patch;
     const t = setTimeout(async () => {
@@ -3505,11 +3511,29 @@ function NoteEditor({
         await updateNote(note.id, patch);
         pendingPatchRef.current = null;
         onChangeLocal(patch);
-        setSaveState("saved");
-      } catch (e) { setSaveState("idle"); notifyError("메모 저장 실패")(e); }
+      } catch (e) { notifyError("메모 저장 실패")(e); }
     }, 700);
     return () => clearTimeout(t);
   }, [title, content, category, folderId]);
+
+  // 저장 버튼 — 대기 중인 debounce 패치를 즉시 flush 하고 목록으로 복귀.
+  const handleSave = async () => {
+    setSaving(true);
+    const patch = pendingPatchRef.current;
+    if (patch) {
+      try {
+        await updateNote(note.id, patch);
+        pendingPatchRef.current = null;
+        onChangeLocal(patch);
+      } catch (e) {
+        setSaving(false);
+        notifyError("메모 저장 실패")(e);
+        return;
+      }
+    }
+    setSaving(false);
+    onBack();
+  };
 
   // 언마운트 시 아직 debounce 대기 중이던 변경을 즉시 저장. 뒤로가기 버튼으로 편집기를
   // 닫을 때 마지막 입력이 유실되지 않도록 하는 안전망.
@@ -3541,9 +3565,13 @@ function NoteEditor({
           placeholder="제목 없음"
           className="flex-1 text-2xl font-medium bg-transparent outline-none placeholder:text-muted-foreground/50"
         />
-        <span className="text-[11px] text-muted-foreground flex-shrink-0">
-          {saveState === "saving" ? "저장 중…" : saveState === "saved" ? "저장됨" : ""}
-        </span>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 disabled:opacity-60 transition-opacity flex-shrink-0"
+        >
+          <Check size={13} /> 저장
+        </button>
       </div>
 
       {/* 메타: 카테고리 + 폴더 */}
