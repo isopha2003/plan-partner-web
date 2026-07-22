@@ -306,6 +306,27 @@ export default function App() {
     })();
   }, [pomodoroOn, abandonOn]);
 
+  // 뽀모도로가 켜진 채 휴식 phase에 진입해 있으면 currentSessionIdRef=null(집중 세션 종료됨).
+  // 이 상태에서 사용자가 뽀모도로를 끄면 tick effect는 timerSec를 다시 증가시키지만 열린
+  // DB 세션이 없어서 그 시간이 재시작 후 완전히 사라지는 데이터 유실 버그가 있었음.
+  // pom을 끄는 순간 focus로 되돌리고 새 세션을 시작해 시간이 계속 기록되게 함.
+  useEffect(() => {
+    if (pomodoroOn) return;
+    if (timerState !== "running") return;
+    if (pomPhase !== "break") return;
+    setPomPhase("focus");
+    setPomPhaseSec(0);
+    if (!currentSessionIdRef.current && !timerActionBusyRef.current) {
+      (async () => {
+        try {
+          const session = await startTimerSession(TODAY_STR);
+          currentSessionIdRef.current = session.id;
+          setSessions(s => [...s, session]);
+        } catch (e) { notifyError("타이머 세션 시작 실패")(e); }
+      })();
+    }
+  }, [pomodoroOn, timerState, pomPhase]);
+
   // 방치 알림 — 타이머가 수동 정지된 상태(stopped)로 abandonMin분 유지되면 1회 알림.
   // running/auto-paused로 전환되면 취소, 다시 stopped로 진입할 때마다 새로 카운트 시작.
   useEffect(() => {
