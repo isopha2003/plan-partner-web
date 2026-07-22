@@ -43,15 +43,25 @@ export function useTimerWindow() {
     winRef.current?.close();
   };
 
-  // 메인 창을 닫으면 뜬 타이머 창도 함께 닫아서 프로세스 전체가 종료되도록 함
+  // 메인 창을 닫으면 뜬 타이머 창도 함께 닫아서 프로세스 전체가 종료되도록 함.
+  // onCloseRequested는 Promise로 unlisten을 돌려줌 — cleanup이 promise 이전에
+  // 실행되면 unlisten이 안 되므로, cancelled 플래그를 두고 promise resolve 후에도
+  // 정리 가능하도록 함.
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     getCurrentWindow()
       .onCloseRequested(async () => {
         await winRef.current?.close();
       })
-      .then((fn) => { unlisten = fn; });
-    return () => unlisten?.();
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   return { isOpen, open, close };
