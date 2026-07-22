@@ -4149,12 +4149,25 @@ function BlockDetailPanel({
             </div>
           )}
 
-          {repeatType !== "none" && (
-            <button onClick={saveRepeat}
-              className={`w-full py-1.5 text-xs rounded-lg font-medium transition-all ${showRepeatSaved ? "bg-sky-100 text-sky-700" : "bg-muted hover:bg-muted/70 text-foreground"}`}>
-              {showRepeatSaved ? "✓ 반복 저장됨" : "반복 저장"}
-            </button>
-          )}
+          {repeatType !== "none" && (() => {
+            // 매주인데 요일이 하나도 선택 안 됐거나 종료 조건이 '날짜'인데 날짜가 비어 있으면
+            // saveRepeat이 조용히 no-op으로 끝나 사용자는 '저장'을 눌러도 아무 일이 안 벌어져
+            // 원인을 알 수 없음. 버튼을 disabled로 만들고 이유를 짧게 표시.
+            const missingDays = repeatType === "weekly" && repeatDays.length === 0;
+            const missingDate = repeatEndType === "date" && !repeatEndDate;
+            const disabled = missingDays || missingDate;
+            const hint = missingDays ? "요일을 하나 이상 선택해 주세요" : missingDate ? "종료 날짜를 선택해 주세요" : "";
+            return (
+              <>
+                <button onClick={saveRepeat}
+                  disabled={disabled}
+                  className={`w-full py-1.5 text-xs rounded-lg font-medium transition-all ${showRepeatSaved ? "bg-sky-100 text-sky-700" : "bg-muted hover:bg-muted/70 text-foreground"} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                  {showRepeatSaved ? "✓ 반복 저장됨" : "반복 저장"}
+                </button>
+                {hint && <div className="text-[10px] text-muted-foreground mt-1">{hint}</div>}
+              </>
+            );
+          })()}
         </div>
       </div>
 
