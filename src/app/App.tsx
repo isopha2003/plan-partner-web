@@ -267,16 +267,31 @@ export default function App() {
   const [pomPhase, setPomPhase] = useState<"focus" | "break">("focus");
   const [pomPhaseSec, setPomPhaseSec] = useState(0);
 
-  // 뽀모도로 켤 때 알림 권한 요청 — 이미 허용돼 있으면 no-op
+  // 뽀모도로 or 방치 알림 켤 때 알림 권한 요청 — 이미 허용돼 있으면 no-op
   useEffect(() => {
-    if (!pomodoroOn) return;
+    if (!pomodoroOn && !abandonOn) return;
     (async () => {
       try {
         const granted = await isPermissionGranted();
         if (!granted) await requestPermission();
       } catch (e) { console.error(e); }
     })();
-  }, [pomodoroOn]);
+  }, [pomodoroOn, abandonOn]);
+
+  // 방치 알림 — 타이머가 수동 정지된 상태(stopped)로 abandonMin분 유지되면 1회 알림.
+  // running/auto-paused로 전환되면 취소, 다시 stopped로 진입할 때마다 새로 카운트 시작.
+  useEffect(() => {
+    if (!abandonOn) return;
+    if (timerState !== "stopped") return;
+    const id = window.setTimeout(async () => {
+      try {
+        const granted = await isPermissionGranted();
+        if (!granted) return;
+        sendNotification({ title: "타이머가 멈춰 있어요", body: `${abandonMin}분 동안 아무 활동도 없어요. 다시 시작할까요?` });
+      } catch (e) { console.error(e); }
+    }, abandonMin * 60 * 1000);
+    return () => window.clearTimeout(id);
+  }, [abandonOn, abandonMin, timerState]);
 
   useEffect(() => {
     (async () => {
