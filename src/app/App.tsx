@@ -391,11 +391,17 @@ export default function App() {
   // 타이머 시작/정지는 오직 사용자가 버튼을 눌러서만 발생 — 창 포커스 등 자동 트리거 없음
   // (예전에는 창 포커스 이탈 시 자동 일시정지했지만 의도치 않게 끊기는 문제로 비활성화)
 
-  // 뜬 타이머 창(별도 webview)과의 상태 동기화 — 매초 자연스럽게 브로드캐스트됨
+  // 뜬 타이머 창(별도 webview) 상태 훅을 여기서 관리 — GlobalTimer 내부에서 관리하면
+  // 아래 브로드캐스트 effect가 창 오픈 여부를 알 수 없어 항상 매초 emit해야 했음.
+  // 이제 창이 닫혀 있을 때는 emit 자체를 스킵.
+  const floatWin = useTimerWindow();
+
+  // 뜬 타이머 창(별도 webview)과의 상태 동기화 — 창이 열려 있을 때만 매초 브로드캐스트.
   useEffect(() => {
+    if (!floatWin.isOpen) return;
     const pomPhaseRemainSec = Math.max(0, (pomPhase === "focus" ? pomWork : pomBreak) * 60 - pomPhaseSec);
     emit("timer:state", { timerState, timerSec, pomodoroOn, pomPhase, pomPhaseRemainSec });
-  }, [timerState, timerSec, pomodoroOn, pomPhase, pomPhaseSec, pomWork, pomBreak]);
+  }, [floatWin.isOpen, timerState, timerSec, pomodoroOn, pomPhase, pomPhaseSec, pomWork, pomBreak]);
 
   // 뜬 타이머 창에서 온 시작/정지 요청 처리 — Supabase 쓰기는 항상 이 메인 창에서만 발생
   useEffect(() => {
@@ -729,6 +735,7 @@ export default function App() {
             pomodoroOn={pomodoroOn}
             pomPhase={pomPhase}
             pomPhaseRemainSec={Math.max(0, (pomPhase === "focus" ? pomWork : pomBreak) * 60 - pomPhaseSec)}
+            floatWin={floatWin}
           />
         </div>
 
@@ -912,7 +919,7 @@ export default function App() {
 // "일시정지" 버튼이 없고 시작/정지만 있음.
 function GlobalTimer({
   timerState, timerSec, sessions, onStart, onManualStop, onReset,
-  pomodoroOn, pomPhase, pomPhaseRemainSec,
+  pomodoroOn, pomPhase, pomPhaseRemainSec, floatWin,
 }: {
   timerState: TimerState;
   timerSec: number;
@@ -923,13 +930,13 @@ function GlobalTimer({
   pomodoroOn: boolean;
   pomPhase: "focus" | "break";
   pomPhaseRemainSec: number;
+  floatWin: ReturnType<typeof useTimerWindow>;
 }) {
   const isRunning = timerState === "running";
   const isAutoPaused = timerState === "auto-paused";
   const isStopped = timerState === "stopped";
   const isBreak = pomodoroOn && isRunning && pomPhase === "break";
   const [showHistory, setShowHistory] = useState(false);
-  const floatWin = useTimerWindow();
 
   return (
     <div className="relative">
