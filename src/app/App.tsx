@@ -567,7 +567,11 @@ export default function App() {
               // (히스토리 팝오버가 "manual"(■)로 표시하던 semantic 어긋남을 바로잡음)
               await endTimerSession(sid, "auto");
               setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: "auto" } : x));
-            } catch (e) { console.error(e); }
+            } catch (e) {
+              // 예전엔 console.error만 남기고 넘어가서, 세션이 "ongoing"으로 남은 채 다음 실행 때
+              // 뒤늦게 정리되며 오늘/다음 시작일의 집중 시간이 몇 시간씩 부풀어 보이던 문제.
+              notifyError("집중 세션 마감 실패")(e);
+            }
           }
           setPomPhase("break");
           setPomPhaseSec(0);
@@ -577,7 +581,7 @@ export default function App() {
             const session = await startTimerSession(TODAY_STR);
             currentSessionIdRef.current = session.id;
             setSessions(s => [...s, session]);
-          } catch (e) { console.error(e); }
+          } catch (e) { notifyError("휴식 후 세션 시작 실패")(e); }
           setPomPhase("focus");
           setPomPhaseSec(0);
           notifyPomodoro("휴식 완료", `다시 ${pomWork}분 집중해요`);
@@ -603,7 +607,23 @@ export default function App() {
   // 쌓이면 오히려 지저분해짐. 재사용이 필요하면 사이드바의 "+ 새 템플릿"으로 명시적으로 등록.
   // 이 경로에선 낙관적 temp id 없이 DB 저장을 기다렸다가 진짜 id로 시작 — 안 그러면 temp→real
   // 스왑 시 상세 패널(key={id})이 리마운트되며 사용자가 입력 중이던 제목이 날아감.
-  const addBlock = (block: Block, options?: { select?: boolean; openInline?: boolean }) => {
+  const addBlock = (block: Block, options?: { select?: boolean; openInline?: boolean }, retryLeft = 5) => {
+    // 부모 블록/템플릿이 아직 낙관적 temp-id 상태라면 parent_block_id / template_id FK 컬럼에
+    // temp-id를 그대로 저장하려다 FK 활성화 후 "블록 추가 실패" 로 실패함. 부모/템플릿이 DB에
+    // 실 등록될 때까지 잠깐 미뤄서 재시도 — 스왑 후 통과. retryLeft 로 무한 루프 방지.
+    const pendingParent = block.parentBlockId?.startsWith("temp-");
+    const pendingTemplate = block.templateId?.startsWith("temp-");
+    if (pendingParent || pendingTemplate) {
+      if (retryLeft <= 0) {
+        const reason = pendingParent
+          ? "부모 블록 저장이 완료되지 않아 자식 블록을 만들 수 없어요"
+          : "템플릿 저장이 완료되지 않아 이 블록을 만들 수 없어요";
+        notifyError("블록 추가 실패")(new Error(reason));
+        return;
+      }
+      setTimeout(() => addBlock(block, options, retryLeft - 1), 200);
+      return;
+    }
     if (options?.select || options?.openInline) {
       insertBlock(block)
         .then(real => {
@@ -614,10 +634,19 @@ export default function App() {
         .catch(notifyError("블록 추가 실패"));
       return;
     }
-    const tempId = `temp-${Date.now()}`;
+    // 밀리초가 같은 프레임에 두 번 클릭이 들어오면 Date.now() 만으론 tempId가 충돌해서
+     // 두 번째 낙관적 로우가 첫 번째 real 로우로 통째로 덮어씌워지고, DB엔 두 건이지만 화면엔
+     // 한 건만 보이는 유령 상태가 나옴. randomUUID로 충돌을 원천 차단.
+    const tempId = `temp-${crypto.randomUUID()}`;
     setBlocks(bs => [...bs, { ...block, id: tempId }]);
     insertBlock(block)
-      .then(real => setBlocks(bs => bs.map(b => (b.id === tempId ? real : b))))
+      .then(real => {
+        setBlocks(bs => bs.map(b => (b.id === tempId ? real : b)));
+        // 사용자가 낙관적 삽입 직후 그 블록을 클릭해 selectedBlock 이 temp-id 로 남아 있으면,
+        // 이후 patchBlock(temp-id) 는 UPDATE 0 rows 로 조용히 사라지고 checklist_items 등
+        // FK 컬럼에 temp-id 를 저장하려는 시도는 FK 위반으로 실패함. 스왑을 selectedBlock 에도 반영.
+        setSelectedBlock(prev => (prev?.id === tempId ? real : prev));
+      })
       .catch(e => { setBlocks(bs => bs.filter(b => b.id !== tempId)); notifyError("블록 추가 실패")(e); });
   };
 
@@ -632,7 +661,23 @@ export default function App() {
   };
 
   const deleteBlock = (id: string) => {
-    setBlocks(bs => bs.filter(b => b.id !== id));
+    // FK 활성화 후에는 parent_block_id ON DELETE CASCADE 로 자식 블록이 DB에서도 함께 지워짐.
+    // 로컬 상태만 부모를 제거하면 자식은 유령으로 남아 다음 refetch 전까지 이상하게 보일 수 있어
+    // 로컬 상태에서도 함께 정리. 자식의 자식까지 재귀로 훑음.
+    setBlocks(bs => {
+      const toDelete = new Set<string>([id]);
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const b of bs) {
+          if (b.parentBlockId && toDelete.has(b.parentBlockId) && !toDelete.has(b.id)) {
+            toDelete.add(b.id);
+            grew = true;
+          }
+        }
+      }
+      return bs.filter(b => !toDelete.has(b.id));
+    });
     setSelectedBlock(prev => prev?.id === id ? null : prev);
     deleteBlockRow(id).catch(notifyError("블록 삭제 실패"));
   };
@@ -640,11 +685,33 @@ export default function App() {
   const deleteRepeatGroup = (id: string, fromDate: string) => {
     const block = blocks.find(b => b.id === id);
     const groupId = block?.repeatGroupId;
+    // 반복 그룹에서 지운 블록의 자식(parent_block_id=반복 인스턴스)도 FK CASCADE로 DB에선
+    // 함께 사라짐. 로컬 상태에서도 재귀로 훑어 함께 지워줘야 다음 refetch 전까지 유령 자식이
+    // 남지 않음. 단일 블록 삭제 시 deleteBlock에서 한 것과 같은 fixed-point 방식.
+    setBlocks(bs => {
+      const toDelete = new Set<string>();
+      if (!groupId) {
+        toDelete.add(id);
+      } else {
+        for (const b of bs) {
+          if (b.repeatGroupId === groupId && b.date >= fromDate) toDelete.add(b.id);
+        }
+      }
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const b of bs) {
+          if (b.parentBlockId && toDelete.has(b.parentBlockId) && !toDelete.has(b.id)) {
+            toDelete.add(b.id);
+            grew = true;
+          }
+        }
+      }
+      return bs.filter(b => !toDelete.has(b.id));
+    });
     if (!groupId) {
-      setBlocks(bs => bs.filter(b => b.id !== id));
       deleteBlockRow(id).catch(notifyError("블록 삭제 실패"));
     } else {
-      setBlocks(bs => bs.filter(b => !(b.repeatGroupId === groupId && b.date >= fromDate)));
       apiDeleteRepeatGroup(groupId, fromDate).catch(notifyError("반복 블록 삭제 실패"));
     }
     setSelectedBlock(null);
@@ -664,7 +731,7 @@ export default function App() {
       const dateStr = toDateStr(d);
       if (repeat.endType === "date" && dateStr > repeat.endDate) return;
       instances.push({
-        ...block, id: `b-${Date.now()}-${idx}`,
+        ...block, id: `b-${crypto.randomUUID()}`,
         date: dateStr, completed: false,
         repeatGroupId: groupId, repeat,
       });
@@ -711,7 +778,10 @@ export default function App() {
   };
 
   const refetchBlocks = async () => {
-    try { setBlocks(await fetchBlocks()); } catch (e) { console.error(e); }
+    // 예전엔 실패해도 console에만 남겨서, setBlockRepeat 등 mutation 성공 후 refetch가 실패하면
+    // 화면엔 낙관적 temp 인스턴스가 유령처럼 남아 사용자가 원인도 모른 채 지우지도 편집하지도
+    // 못하는 상태가 됨.
+    try { setBlocks(await fetchBlocks()); } catch (e) { notifyError("블록 새로고침 실패")(e); }
   };
 
   const setBlockRepeat = (id: string, repeat: BlockRepeat) => {
@@ -749,7 +819,10 @@ export default function App() {
     const dayBlocks = blocks.filter(b => b.date === date && !b.parentBlockId);
     if (!dayBlocks.length) return;
     const blocksSnapshot = dayBlocks.map(b => ({ title: b.title, color: b.color, startH: b.startH, startM: b.startM, endH: b.endH, endM: b.endM, tags: b.tags, memo: b.memo }));
-    const tempId = `temp-${Date.now()}`;
+    // 밀리초가 같은 프레임에 두 번 클릭이 들어오면 Date.now() 만으론 tempId가 충돌해서
+     // 두 번째 낙관적 로우가 첫 번째 real 로우로 통째로 덮어씌워지고, DB엔 두 건이지만 화면엔
+     // 한 건만 보이는 유령 상태가 나옴. randomUUID로 충돌을 원천 차단.
+    const tempId = `temp-${crypto.randomUUID()}`;
     setScheduleTemplates(ts => [...ts, { id: tempId, name, blocks: blocksSnapshot }]);
     createScheduleTemplateRow(name, blocksSnapshot)
       .then(real => setScheduleTemplates(ts => ts.map(t => (t.id === tempId ? real : t))))
@@ -767,7 +840,7 @@ export default function App() {
     const existing = blocks.filter(b => b.date === targetDate && !b.parentBlockId);
     const newBlocks = tpl.blocks
       .filter(tb => !existing.some(b => tb.startH * 60 + tb.startM < b.endH * 60 + b.endM && tb.endH * 60 + tb.endM > b.startH * 60 + b.startM))
-      .map((tb, i) => ({ ...tb, id: `temp-tpl-${Date.now()}-${i}`, date: targetDate, completed: false }));
+      .map((tb) => ({ ...tb, id: `temp-tpl-${crypto.randomUUID()}`, date: targetDate, completed: false }));
     if (!newBlocks.length) return;
     setBlocks(bs => [...bs, ...newBlocks]);
     insertBlocksBulk(newBlocks)
@@ -798,7 +871,10 @@ export default function App() {
   };
 
   const addTemplate = (t: { title: string; color: string; tags: string[] }) => {
-    const tempId = `temp-${Date.now()}`;
+    // 밀리초가 같은 프레임에 두 번 클릭이 들어오면 Date.now() 만으론 tempId가 충돌해서
+     // 두 번째 낙관적 로우가 첫 번째 real 로우로 통째로 덮어씌워지고, DB엔 두 건이지만 화면엔
+     // 한 건만 보이는 유령 상태가 나옴. randomUUID로 충돌을 원천 차단.
+    const tempId = `temp-${crypto.randomUUID()}`;
     setTemplates(ts => [...ts, { id: tempId, ...t }]);
     createTemplate(t)
       .then(real => setTemplates(ts => ts.map(x => (x.id === tempId ? real : x))))
@@ -813,7 +889,10 @@ export default function App() {
   };
 
   const addDeadline = (d: { title: string; dueDate: string }) => {
-    const tempId = `temp-${Date.now()}`;
+    // 밀리초가 같은 프레임에 두 번 클릭이 들어오면 Date.now() 만으론 tempId가 충돌해서
+     // 두 번째 낙관적 로우가 첫 번째 real 로우로 통째로 덮어씌워지고, DB엔 두 건이지만 화면엔
+     // 한 건만 보이는 유령 상태가 나옴. randomUUID로 충돌을 원천 차단.
+    const tempId = `temp-${crypto.randomUUID()}`;
     setDeadlines(ds => [...ds, { id: tempId, title: d.title, dueDate: d.dueDate, completed: false }]);
     createDeadline(d)
       .then(real => setDeadlines(ds => ds.map(x => (x.id === tempId ? real : x))))
@@ -1063,7 +1142,15 @@ export default function App() {
             }}
             onSetNextBlock={(nextBlockId) => {
               // null은 "연결 해제"라는 의미 있는 값이라 undefined(patchBlock이 "건드리지 않음"으로
-              // 해석)로 뭉개면 안 됨 — 그대로 넘겨야 DB에서도 실제로 지워짐
+              // 해석)로 뭉개면 안 됨 — 그대로 넘겨야 DB에서도 실제로 지워짐.
+              // 아직 낙관적 삽입이 끝나지 않은 temp-id(=DB에 실제 로우 없음) 를 next_block_id
+              // FK 컬럼에 저장하려 하면 FK 활성화 후로는 "블록 저장 실패" 토스트가 뜸.
+              // temp id는 로컬에만 반영하고 DB 저장은 스킵 — real id로 스왑된 이후 사용자가
+              // 다시 지정하면 정상 저장됨.
+              if (nextBlockId && nextBlockId.startsWith("temp-")) {
+                setSelectedBlock({ ...selectedBlock, nextBlockId });
+                return;
+              }
               updateBlock(selectedBlock.id, { nextBlockId } as Partial<Block>);
               setSelectedBlock({ ...selectedBlock, nextBlockId: nextBlockId ?? undefined });
             }}
@@ -3053,13 +3140,17 @@ function MemoSection() {
         const [ns, fs] = await Promise.all([fetchNotes(), fetchNoteFolders()]);
         setNotes(ns);
         setFolders(fs);
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        // 예전엔 console.error만 남기고 조용히 넘어가서, 로드 실패 시 사용자가 빈 메모 화면을
+        // 보고 데이터가 사라진 줄 알 수 있었음. 토스트로 명시.
+        notifyError("메모 불러오기 실패")(e);
+      }
       setLoaded(true);
     })();
   }, []);
 
-  const refreshNotes = async () => { try { setNotes(await fetchNotes()); } catch (e) { console.error(e); } };
-  const refreshFolders = async () => { try { setFolders(await fetchNoteFolders()); } catch (e) { console.error(e); } };
+  const refreshNotes = async () => { try { setNotes(await fetchNotes()); } catch (e) { notifyError("메모 새로고침 실패")(e); } };
+  const refreshFolders = async () => { try { setFolders(await fetchNoteFolders()); } catch (e) { notifyError("폴더 새로고침 실패")(e); } };
 
   const handleCreateNote = async () => {
     try {
@@ -3563,7 +3654,9 @@ function NoteEditor({
     if (p) {
       updateNote(note.id, p)
         .then(() => onChangeLocalRef.current(p))
-        .catch(e => console.error("메모 저장 실패", e));
+        // 예전엔 console.error만 남겨서, 뒤로가기 순간 마지막 몇 초 입력이 저장 실패로
+        // 조용히 사라져도 사용자가 알 수 없었음.
+        .catch(notifyError("메모 저장 실패"));
     }
   }, [note.id]);
 

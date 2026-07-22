@@ -151,10 +151,19 @@ export async function patchBlock(id: string, changes: any) {
   if (changes.title !== undefined) push("title", changes.title);
   if (changes.color !== undefined) push("color", changes.color);
   if (changes.date !== undefined) push("date", changes.date);
+  // 시/분은 반드시 짝으로 와야 함 — 한쪽만 오면 toTime이 "HH:undefined:00" 같은
+   // 깨진 문자열을 만들고 그 값이 그대로 DB에 저장되면 다음 fetch에서 parseTime이
+   // 조용히 0분으로 폴백해 캘린더 배치가 어긋남. 명시적으로 거부.
   if (changes.startH !== undefined || changes.startM !== undefined) {
+    if (changes.startH === undefined || changes.startM === undefined) {
+      throw new Error("patchBlock: startH와 startM은 반드시 함께 전달해야 함");
+    }
     push("start_time", toTime(changes.startH, changes.startM));
   }
   if (changes.endH !== undefined || changes.endM !== undefined) {
+    if (changes.endH === undefined || changes.endM === undefined) {
+      throw new Error("patchBlock: endH와 endM은 반드시 함께 전달해야 함");
+    }
     push("end_time", toTime(changes.endH, changes.endM));
   }
   if (changes.completed !== undefined) {

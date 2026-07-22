@@ -108,13 +108,17 @@ CREATE INDEX IF NOT EXISTS notes_folder_idx ON notes (folder_id);
 
 // 이미 구버전 notes 테이블(단일 main 노트, id/content/updated_at만)이 있던 설치를 위한
 // 방어적 컬럼 추가. 각 ALTER는 컬럼이 이미 있으면 에러가 나므로 개별 try/catch로 무시.
-// created_at은 ALTER 시 non-constant default(datetime('now'))를 못 붙이므로 nullable로 추가.
+// created_at/updated_at은 ALTER 시 non-constant default(datetime('now'))를 못 붙이므로
+// nullable로 추가하고 아래에서 백필. updated_at은 이론상 항상 존재했지만, 훨씬 오래된
+// (id, content)만 있던 흔적을 만나면 fetch ORDER BY updated_at부터 터져서 노트 전체가
+// 안 열리는 캐스케이드가 나므로 안전망으로 함께 시도.
 const NOTE_UPGRADES = [
   "ALTER TABLE notes ADD COLUMN title TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE notes ADD COLUMN category TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE notes ADD COLUMN folder_id TEXT",
   "ALTER TABLE notes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE notes ADD COLUMN created_at TEXT",
+  "ALTER TABLE notes ADD COLUMN updated_at TEXT",
   "ALTER TABLE notes ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0",
 ];
 
@@ -128,6 +132,13 @@ export function getDb(): Promise<Database> {
   if (!dbPromise) {
     const p: Promise<Database> = (async () => {
       const db = await Database.load("sqlite:planner.db");
+      // 0) 외래키 제약 활성화 — 기본 OFF라 켜지 않으면 스키마의 ON DELETE CASCADE/SET NULL이
+      //    전부 no-op. 폴더/템플릿/부모블록을 지워도 자식 로우가 그대로 남아 UI에 고아 상태로
+      //    표시되거나(예: folder_id가 죽은 폴더를 가리키는 노트가 모든 뷰에서 안 보임) 이후
+      //    삽입에서 이상 상태가 됨. 켜기만 해도 이후 삭제부터 제대로 동작.
+      //    (기존에 이미 남은 고아는 SQLite가 후속 수정 시에만 체크하므로 즉시 실패하지 않음.)
+      try { await db.execute("PRAGMA foreign_keys = ON"); }
+      catch (e) { console.error("PRAGMA foreign_keys ON failed", e); }
       // 1) 구버전 notes 테이블이 있으면 먼저 컬럼 업그레이드. SCHEMA의 CREATE INDEX가
       //    notes(folder_id)를 참조하므로, 인덱스 생성 전에 folder_id가 있어야 함.
       //    새 DB면 notes 테이블이 아직 없어 각 ALTER가 조용히 실패(무시)하고,
@@ -137,6 +148,11 @@ export function getDb(): Promise<Database> {
       }
       try {
         await db.execute("UPDATE notes SET created_at = updated_at WHERE created_at IS NULL");
+      } catch { /* fresh install: notes 아직 없음 */ }
+      try {
+        // updated_at ALTER는 nullable로 붙였으니(NOT NULL 제약 없음) 방금 새로 추가된
+        // 경우엔 값이 NULL. 정렬 안정성을 위해 created_at 값이나 현재 시각으로 채움.
+        await db.execute("UPDATE notes SET updated_at = COALESCE(created_at, datetime('now')) WHERE updated_at IS NULL");
       } catch { /* fresh install: notes 아직 없음 */ }
       // 2) 테이블/인덱스 생성 (IF NOT EXISTS이라 재실행 안전).
       //    개별 statement 실패는 여기서 삼키고 콘솔에만 남김 — 예전엔 이 루프가 통째로

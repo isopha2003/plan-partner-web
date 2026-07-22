@@ -172,6 +172,15 @@ export async function importFromJson(): Promise<{ path: string } | null> {
   const db = await getDb();
   // 자식 → 부모 순서로 지우고, 부모 → 자식 순서로 채운다.
   const deleteOrder = [...TABLES].reverse();
+  // 임포트 동안에는 FK 제약을 잠시 꺼둔다. blocks.next_block_id 나 checklist_items.parent_item_id
+  // 처럼 같은 테이블 안에서 서로를 가리키는 self-ref가 있어서, 부모 → 자식 삽입 순서를
+  // 지켜도 같은 테이블 내부 순서에 따라 FK 위반이 나올 수 있음. 예전엔 wipe(DELETE) 는
+  // 이미 커밋된 뒤 INSERT 가 FK로 실패해 사용자 DB가 통째로 비어버리는 시나리오가 있었음.
+  // 임포트 직전에 pre-import 백업이 이미 만들어져 있으니 사용자 데이터는 안전.
+  // 참고: tauri-plugin-sql 의 커넥션 풀이 여러 커넥션을 쓰는 상황에서는 이 PRAGMA 가 이 순간
+  // 사용한 커넥션에만 적용될 수 있음. 그래도 대다수 순차 실행 경로에서는 같은 커넥션이
+  // 재사용되므로 실전 방어에는 충분.
+  try { await db.execute("PRAGMA foreign_keys = OFF"); } catch {}
   await db.execute("BEGIN TRANSACTION");
   try {
     for (const t of deleteOrder) {
@@ -198,6 +207,8 @@ export async function importFromJson(): Promise<{ path: string } | null> {
   } catch (e) {
     try { await db.execute("ROLLBACK"); } catch {}
     throw e;
+  } finally {
+    try { await db.execute("PRAGMA foreign_keys = ON"); } catch {}
   }
 
   return { path: picked as string };
