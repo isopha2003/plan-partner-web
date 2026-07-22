@@ -763,7 +763,12 @@ export default function App() {
     setScheduleTemplates(ts => [...ts, { id: tempId, name, blocks: blocksSnapshot }]);
     createScheduleTemplateRow(name, blocksSnapshot)
       .then(real => setScheduleTemplates(ts => ts.map(t => (t.id === tempId ? real : t))))
-      .catch(e => { console.error(e); setScheduleTemplates(ts => ts.filter(t => t.id !== tempId)); });
+      .catch(e => {
+        setScheduleTemplates(ts => ts.filter(t => t.id !== tempId));
+        // 저장 실패를 조용히 롤백만 하면 사용자는 '저장'을 눌렀는데도 목록에서 사라져
+        // 원인을 알 수 없음.
+        notifyError("일정 템플릿 저장 실패")(e);
+      });
   };
 
   const applyScheduleTemplate = (templateId: string, targetDate: string) => {
