@@ -107,6 +107,15 @@ const parseLocalDate = (s: string) => {
   const [y, m, d] = s.split("-").map(Number);
   return new Date(y, m - 1, d);
 };
+// 두 로컬 날짜(자정) 사이의 정수 일수 차이. Date.UTC로 각 날짜를 timezone-agnostic한 UTC
+// 자정으로 변환해 뺀 뒤 86400000으로 나눔 — 이렇게 하면 DST 전환(하루가 23h 또는 25h)이
+// 있는 지역에서도 항상 정확한 정수 일수가 나옴. 예전엔 `(t2 - t1) / 86400000`을
+// Math.ceil해서 DST fall-back 시 "내일" 마감이 D-2로 표시되는 등 오차가 생겼음.
+const daysBetween = (a: Date, b: Date) => {
+  const aUTC = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const bUTC = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((aUTC - bUTC) / 86400000);
+};
 // 자정 롤오버: 아래 세 값은 컴포넌트들이 프op이 아니라 모듈 전역 변수로 직접 참조하고 있어서
 // (예: TodaySection 안에서 `TODAY_STR` 그대로 사용), `let`로 두고 재할당하면 다음 렌더링부터
 // 모든 곳에서 자동으로 새 값을 읽게 됨. 실제로 리렌더를 발생시키는 건 App()의 tick 로직.
@@ -330,7 +339,10 @@ export default function App() {
         setTimerSec(totalSec);
         // 과거 날짜별 집중 시간 집계 로드
         setFocusSecByDate(await fetchFocusSecByDate());
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        // 조용히 삼키면 활동 기록 화면이 이유 없이 텅 비어 유저가 원인을 알 수 없음.
+        notifyError("타이머 기록 불러오기 실패")(e);
+      }
     })();
   }, []);
 
@@ -352,7 +364,13 @@ export default function App() {
       const session = await startTimerSession(TODAY_STR);
       currentSessionIdRef.current = session.id;
       setSessions(s => [...s, session]);
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      // DB 실패를 조용히 삼키면 timerState는 running인데 currentSessionIdRef는 null이라
+      // 유저는 타이머가 도는 것처럼 보이지만 실제 집중 시간이 기록되지 않는 데이터 유실이
+      // 발생함. 상태를 되돌리고 사용자에게 알림.
+      setTimerState("stopped");
+      notifyError("타이머 시작 실패")(e);
+    }
     finally { timerActionBusyRef.current = false; }
   };
 
@@ -370,7 +388,11 @@ export default function App() {
     try {
       await endTimerSession(sid, reason);
       setSessions(s => s.map(x => x.id === sid ? { ...x, endedAt: new Date().toISOString(), endReason: reason } : x));
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      // 세션이 DB에서 'ongoing' 상태로 남게 되지만 다음 앱 시작 시 stale 정리가 자동으로
+      // 마감해줌. 사용자에게는 알림만 표시.
+      notifyError("타이머 정지 저장 실패")(e);
+    }
     finally { timerActionBusyRef.current = false; }
   };
 
@@ -1297,7 +1319,7 @@ function TodaySection({
             </div>
             <div className="space-y-1.5">
               {overdueDeadlines.map(d => {
-                const daysOver = Math.abs(Math.ceil((parseLocalDate(d.dueDate).getTime() - TODAY_DATE.getTime()) / 86400000));
+                const daysOver = Math.abs(daysBetween(parseLocalDate(d.dueDate), TODAY_DATE));
                 return (
                   <div key={d.id} className="flex items-center gap-2.5">
                     <button onClick={() => onToggleDeadline(d.id)}>
@@ -2256,8 +2278,7 @@ function DeadlinesSection({
   const [newTitle, setNewTitle] = useState("");
   const [newDueDate, setNewDueDate] = useState(TODAY_STR);
 
-  const daysLeft = (date: string) =>
-    Math.ceil((parseLocalDate(date).getTime() - TODAY_DATE.getTime()) / 86400000);
+  const daysLeft = (date: string) => daysBetween(parseLocalDate(date), TODAY_DATE);
 
   return (
     <div className="flex-1 overflow-y-auto">
