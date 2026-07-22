@@ -31,6 +31,21 @@ const TABLES = [
 
 type TableName = typeof TABLES[number];
 
+// 각 테이블별로 허용하는 컬럼 화이트리스트 — db.ts의 SCHEMA와 일치해야 함.
+// import 시 백업 파일에서 온 임의의 키를 SQL에 그대로 넣지 않도록 이 목록으로 교차 필터.
+// (개인용 로컬 앱이라 위험도는 낮지만, 손상·조작된 백업 파일로 스키마 이상 상태에
+//  빠지는 걸 근본적으로 차단.)
+const TABLE_COLUMNS: Record<TableName, readonly string[]> = {
+  block_templates: ["id", "title", "color", "tags", "created_at"],
+  note_folders:    ["id", "name", "color", "sort_order", "created_at"],
+  blocks:          ["id", "template_id", "parent_block_id", "title", "color", "date", "start_time", "end_time", "completed", "completed_at", "memo", "next_block_id", "repeat_group_id", "repeat_rule", "created_at"],
+  checklist_items: ["id", "block_id", "parent_item_id", "text", "completed", "sort_order", "created_at"],
+  deadlines:       ["id", "title", "due_date", "completed", "completed_at", "created_at"],
+  schedule_templates: ["id", "name", "blocks", "created_at"],
+  timer_sessions:  ["id", "date", "started_at", "ended_at", "end_reason", "created_at"],
+  notes:           ["id", "title", "content", "category", "folder_id", "sort_order", "created_at", "updated_at"],
+};
+
 // 백업 파일명 타임스탬프. ms 까지 붙여 같은 초 안에 두 번 눌러도 파일명이 겹치지 않게.
 // VACUUM INTO는 대상 파일이 이미 있으면 실패하므로 초 단위 해상도만으론 rapid click 시
 // 충돌이 남 → ms 자리로 확실히 유니크하게 만듦.
@@ -165,7 +180,12 @@ export async function importFromJson(): Promise<{ path: string } | null> {
     for (const t of TABLES) {
       const rows = tables[t] as any[];
       if (rows.length === 0) continue;
-      const cols = Object.keys(rows[0]);
+      // 화이트리스트로 필터 — 백업 파일 rows[0]에 있는 키 중 스키마에 실제 존재하는
+      // 것만 사용. 알 수 없는 컬럼이 있어도 조용히 버림(엄격 매칭보다 관대한 편이
+      // 스키마 진화 시 유리 — 예전 백업을 새 앱에서 여전히 복원 가능).
+      const allowed = TABLE_COLUMNS[t];
+      const cols = Object.keys(rows[0]).filter(c => allowed.includes(c));
+      if (cols.length === 0) continue;
       const placeholders = cols.map(() => "?").join(", ");
       const colList = cols.join(", ");
       const stmt = `INSERT INTO ${t} (${colList}) VALUES (${placeholders})`;
