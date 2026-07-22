@@ -5,7 +5,9 @@ import {
   BarChart2, Settings, Calendar, Target, Flame, FileText,
   Edit3, Check, AlertCircle, Info, PictureInPicture2 as PictureInPicture,
   Folder, FolderPlus, MoreVertical, ArrowLeft, ArrowUpDown, Trash2,
+  Minus, Square, Copy,
 } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   fetchTemplates, createTemplate, deleteTemplateRow, updateTemplateRow, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, deleteRepeatInstancesExceptOrigin, insertBlocksBulk,
@@ -866,6 +868,9 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
 
+      {/* ── Custom title bar (decorations:false 상태에서 OS 크롬 대체) ── */}
+      <AppTitleBar />
+
       {/* ── Global Header ── */}
       <header className="flex items-center gap-6 px-5 border-b border-border bg-card flex-shrink-0" style={{ height: 52 }}>
         <div className="flex items-center gap-2.5 flex-shrink-0">
@@ -1075,6 +1080,69 @@ export default function App() {
       </div>
       <AppTooltipRoot />
       <Toaster position="bottom-right" duration={4000} />
+    </div>
+  );
+}
+
+// ── Custom title bar (Tauri decorations:false 상태에서 OS 크롬 대체) ────
+// 앱 톤에 맞춘 32px 높이 얇은 바 — 좌측 앱 아이콘·이름, 우측 min/max/close 버튼.
+// `data-tauri-drag-region`을 걸어 사용자가 이 영역을 드래그하면 창이 이동함.
+// 더블클릭으로 최대화 토글(Windows 표준 동작).
+function AppTitleBar() {
+  const [isMax, setIsMax] = useState(false);
+  useEffect(() => {
+    const win = getCurrentWindow();
+    win.isMaximized().then(setIsMax).catch(() => {});
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    win.onResized(() => { win.isMaximized().then(setIsMax).catch(() => {}); })
+      .then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
+
+  const toggleMax = async () => {
+    const win = getCurrentWindow();
+    try {
+      if (await win.isMaximized()) await win.unmaximize();
+      else await win.maximize();
+    } catch (e) { console.error("최대화 토글 실패", e); }
+  };
+
+  const btnBase = "h-full w-11 flex items-center justify-center transition-colors text-muted-foreground";
+
+  return (
+    <div
+      data-tauri-drag-region
+      onDoubleClick={toggleMax}
+      className="flex items-center justify-between h-8 pl-3 bg-card border-b border-border select-none flex-shrink-0"
+    >
+      <div data-tauri-drag-region className="flex items-center gap-2 pointer-events-none">
+        <Clock size={12} className="text-primary" />
+        <span className="text-[11px] font-medium text-foreground/80">생활 플래너</span>
+      </div>
+      <div className="flex items-stretch h-full">
+        <button
+          onClick={() => getCurrentWindow().minimize().catch(e => console.error("최소화 실패", e))}
+          className={`${btnBase} hover:bg-muted`}
+          aria-label="최소화"
+        >
+          <Minus size={14} />
+        </button>
+        <button
+          onClick={toggleMax}
+          className={`${btnBase} hover:bg-muted`}
+          aria-label={isMax ? "이전 크기로" : "최대화"}
+        >
+          {isMax ? <Copy size={11} /> : <Square size={11} />}
+        </button>
+        <button
+          onClick={() => getCurrentWindow().close().catch(e => console.error("닫기 실패", e))}
+          className={`${btnBase} hover:bg-destructive hover:text-destructive-foreground`}
+          aria-label="닫기"
+        >
+          <X size={14} />
+        </button>
+      </div>
     </div>
   );
 }
