@@ -3313,20 +3313,44 @@ function NoteEditor({
   const [folderId, setFolderId] = useState<string | null>(note.folderId);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("saved");
   const first = useRef(true);
+  // 아직 debounce 대기 중인 미저장 변경을 추적. 사용자가 debounce 안 끝난 상태에서
+  // 뒤로가기를 누르면 아래 unmount cleanup이 이걸 즉시 flush해서 데이터 유실을 막음.
+  // 예전엔 debounce cleanup(clearTimeout)만 있어서 마지막 몇 초 입력이 그대로 날아감.
+  const pendingPatchRef = useRef<{ title: string; content: string; category: string; folderId: string | null } | null>(null);
 
   // 700ms debounce 자동 저장
   useEffect(() => {
     if (first.current) { first.current = false; return; }
     setSaveState("saving");
+    const patch = { title, content, category, folderId };
+    pendingPatchRef.current = patch;
     const t = setTimeout(async () => {
       try {
-        await updateNote(note.id, { title, content, category, folderId });
-        onChangeLocal({ title, content, category, folderId });
+        await updateNote(note.id, patch);
+        pendingPatchRef.current = null;
+        onChangeLocal(patch);
         setSaveState("saved");
       } catch (e) { setSaveState("idle"); notifyError("메모 저장 실패")(e); }
     }, 700);
     return () => clearTimeout(t);
   }, [title, content, category, folderId]);
+
+  // 언마운트 시 아직 debounce 대기 중이던 변경을 즉시 저장. 뒤로가기 버튼으로 편집기를
+  // 닫을 때 마지막 입력이 유실되지 않도록 하는 안전망.
+  //
+  // onChangeLocal은 부모 MemoSection이 매 렌더마다 새 함수로 만들어 내려주므로 deps에
+  // 그대로 넣으면 부모가 다른 이유로 리렌더될 때마다 cleanup이 발화해 debounce 대기 중이던
+  // 저장을 중복으로 트리거함. ref로 감싸서 최신 함수는 참조하되 effect는 재등록되지 않게.
+  const onChangeLocalRef = useRef(onChangeLocal);
+  onChangeLocalRef.current = onChangeLocal;
+  useEffect(() => () => {
+    const p = pendingPatchRef.current;
+    if (p) {
+      updateNote(note.id, p)
+        .then(() => onChangeLocalRef.current(p))
+        .catch(e => console.error("메모 저장 실패", e));
+    }
+  }, [note.id]);
 
   return (
     <div className="flex-1 overflow-hidden flex flex-col">
