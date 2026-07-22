@@ -561,7 +561,10 @@ export default function App() {
     setSelectedBlock(null);
   };
 
-  // Generate repeat instances for a block
+  // Generate repeat instances for a block.
+  // pushInstance는 endDate 초과 시 인스턴스만 스킵 → 이걸로 loop가 자동 멈추진 않으므로
+  // daily/weekly 루프도 endDate 초과를 감지해서 early break해야 함(안 하면 daily는 14일,
+  // weekly는 8주까지 무의미하게 loop만 돌아감).
   const generateRepeatInstances = (block: Block, repeat: BlockRepeat): Block[] => {
     const instances: Block[] = [];
     const groupId = block.repeatGroupId || `rg-${block.id}`;
@@ -582,6 +585,7 @@ export default function App() {
       const maxDays = repeat.endType === "count" ? repeat.endCount : 14;
       for (let i = 1; i <= maxDays && (repeat.endType !== "count" || instances.length < repeat.endCount); i++) {
         const d = new Date(origin); d.setDate(origin.getDate() + i);
+        if (repeat.endType === "date" && toDateStr(d) > repeat.endDate) break;
         pushInstance(d, i);
       }
     } else {
@@ -592,6 +596,7 @@ export default function App() {
           const d = new Date(origin);
           const diff = (day - origin.getDay() + 7) % 7 || 7;
           d.setDate(origin.getDate() + diff + (week - 1) * 7);
+          if (repeat.endType === "date" && toDateStr(d) > repeat.endDate) return instances;
           pushInstance(d, count++);
         }
       }
