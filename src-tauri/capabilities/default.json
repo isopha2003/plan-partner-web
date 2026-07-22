@@ -21,6 +21,7 @@
     "fs:allow-appdata-meta-recursive",
     "updater:default",
     "process:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "process:allow-exit"
   ]
 }
