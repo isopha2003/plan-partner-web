@@ -7,7 +7,7 @@ import {
   Folder, FolderPlus, MoreVertical, ArrowLeft, ArrowUpDown, Trash2,
 } from "lucide-react";
 import {
-  fetchTemplates, createTemplate, deleteTemplateRow, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
+  fetchTemplates, createTemplate, deleteTemplateRow, updateTemplateRow, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, insertBlocksBulk,
   fetchDeadlines, createDeadline, toggleDeadlineRow, deleteDeadlineRow,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
@@ -523,7 +523,10 @@ export default function App() {
 
   // Optimistic insert: shows instantly with a temp id, then swapped for the real DB row.
   // openInline은 캘린더 클릭으로 만든 이름 없는 블록 — 상세 패널을 곧바로 띄우고 제목 편집에
-  // 포커스를 주며, 나중에 제목이 저장되면 매칭 템플릿까지 자동 생성함(justCreatedBlockId로 추적).
+  // 포커스를 주며, 매칭 템플릿을 즉시 사이드바에 자동 추가함(justCreatedBlockId로 추적해서
+  // 나중에 사용자가 제목을 바꾸면 그 템플릿의 이름도 함께 갱신). 예전엔 제목이 저장되는
+  // 시점에만 템플릿을 만들어서, 사용자가 이름을 안 바꾸고 그대로 두면 캘린더 위에만 남고
+  // 사이드바에 등록되지 않아 다음 날짜에 재사용할 수 없던 문제 수정.
   // 이 경로에선 낙관적 temp id 없이 DB 저장을 기다렸다가 진짜 id로 시작 — 안 그러면 temp→real
   // 스왑 시 상세 패널(key={id})이 리마운트되며 사용자가 입력 중이던 제목이 날아감.
   const addBlock = (block: Block, options?: { select?: boolean; openInline?: boolean }) => {
@@ -532,7 +535,20 @@ export default function App() {
         .then(real => {
           setBlocks(bs => [...bs, real]);
           setSelectedBlock(real);
-          if (options.openInline) setJustCreatedBlockId(real.id);
+          if (options.openInline) {
+            setJustCreatedBlockId(real.id);
+            // 매칭 템플릿을 즉시 생성해 사이드바에 등록. 이후 onTitleSave에서 사용자가
+            // 제목을 바꾸면 이 템플릿의 이름도 함께 갱신됨(updateTemplateRow).
+            createTemplate({ title: real.title, color: real.color, tags: real.tags ?? [] })
+              .then(tpl => {
+                setTemplates(ts => [...ts, tpl]);
+                // 새 블록에 templateId 연결 — 로컬 상태와 DB 모두 반영.
+                setBlocks(bs => bs.map(b => b.id === real.id ? { ...b, templateId: tpl.id } : b));
+                setSelectedBlock(prev => (prev && prev.id === real.id ? { ...prev, templateId: tpl.id } : prev));
+                patchBlock(real.id, { templateId: tpl.id }).catch(notifyError("템플릿 연결 저장 실패"));
+              })
+              .catch(notifyError("템플릿 자동 생성 실패"));
+          }
         })
         .catch(notifyError("블록 추가 실패"));
       return;
@@ -900,21 +916,29 @@ export default function App() {
               const wasJustCreated = selectedBlock.id === justCreatedBlockId;
               updateBlock(selectedBlock.id, { title });
               setSelectedBlock({ ...selectedBlock, title });
-              // 캘린더 클릭으로 방금 만든 블록에 이름이 처음 붙는 순간, 같은 이름/색의
-              // 재사용 템플릿을 사이드바에 자동 추가하고 templateId로 연결. 한 번만 실행.
-              if (wasJustCreated && !selectedBlock.templateId) {
-                createTemplate({ title, color: selectedBlock.color, tags: selectedBlock.tags })
-                  .then(tpl => {
-                    setTemplates(ts => [...ts, tpl]);
-                    updateBlock(selectedBlock.id, { templateId: tpl.id });
-                    setSelectedBlock(prev => (prev && prev.id === selectedBlock.id ? { ...prev, templateId: tpl.id } : prev));
-                  })
-                  .catch(notifyError("템플릿 자동 생성 실패"));
+              // 캘린더에서 방금 만든 블록은 addBlock(openInline)에서 매칭 템플릿이 이미
+              // 만들어져 templateId로 연결돼 있음. 이 경우 그 템플릿 이름도 함께 갱신.
+              // 예외 대비로 만약 아직 연결이 없다면 여기서 만들어줌(레거시 데이터/실패 복구).
+              if (wasJustCreated) {
+                const tplId = selectedBlock.templateId;
+                if (tplId) {
+                  setTemplates(ts => ts.map(t => t.id === tplId ? { ...t, title } : t));
+                  updateTemplateRow(tplId, { title }).catch(notifyError("템플릿 이름 저장 실패"));
+                } else {
+                  createTemplate({ title, color: selectedBlock.color, tags: selectedBlock.tags })
+                    .then(tpl => {
+                      setTemplates(ts => [...ts, tpl]);
+                      updateBlock(selectedBlock.id, { templateId: tpl.id });
+                      setSelectedBlock(prev => (prev && prev.id === selectedBlock.id ? { ...prev, templateId: tpl.id } : prev));
+                    })
+                    .catch(notifyError("템플릿 자동 생성 실패"));
+                }
+                setJustCreatedBlockId(prev => (prev === selectedBlock.id ? null : prev));
               }
-              if (wasJustCreated) setJustCreatedBlockId(prev => (prev === selectedBlock.id ? null : prev));
             }}
             onSelectChild={setSelectedBlock}
             onToggleChild={toggleBlock}
+            onDeleteChild={deleteBlock}
             onAddTimeblockChild={(child) => addBlock({
               id: `b-${Date.now()}`,
               parentBlockId: selectedBlock.id,
@@ -3589,7 +3613,7 @@ function SettingsSection({
 function BlockDetailPanel({
   block, childBlocks, templates, sameDayBlocks, initialEditTitle, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave, onTitleSave, onColorSave,
   paletteColors, onAddPaletteColor, onRemovePaletteColor,
-  onSelectChild, onToggleChild, onAddTimeblockChild, onGoToParent, onSetNextBlock,
+  onSelectChild, onToggleChild, onDeleteChild, onAddTimeblockChild, onGoToParent, onSetNextBlock,
 }: {
   block: Block;
   childBlocks: Block[];
@@ -3609,6 +3633,7 @@ function BlockDetailPanel({
   onRemovePaletteColor: (color: string) => void;
   onSelectChild: (b: Block) => void;
   onToggleChild: (id: string) => void;
+  onDeleteChild: (id: string) => void;
   onAddTimeblockChild: (child: { templateId: string; title: string; color: string; tags: string[]; startH: number; startM: number; endH: number; endM: number }) => void;
   onGoToParent: () => void;
   onSetNextBlock: (nextBlockId: string | null) => void;
@@ -3826,7 +3851,7 @@ function BlockDetailPanel({
                 <div
                   key={cb.id}
                   onClick={() => onSelectChild(cb)}
-                  className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/60 rounded-lg px-1.5 py-1 transition-colors"
+                  className="group/child flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/60 rounded-lg px-1.5 py-1 transition-colors"
                 >
                   <button onClick={e => { e.stopPropagation(); onToggleChild(cb.id); }}>
                     {cb.completed
@@ -3839,6 +3864,13 @@ function BlockDetailPanel({
                   <span className="text-muted-foreground flex-shrink-0" >
                     {fmtTime(cb.startH, cb.startM)}-{fmtTime(cb.endH, cb.endM)}
                   </span>
+                  <button
+                    onClick={e => { e.stopPropagation(); onDeleteChild(cb.id); }}
+                    title="하위 타임블록 삭제"
+                    className="opacity-0 group-hover/child:opacity-100 transition-opacity p-0.5 text-muted-foreground hover:text-destructive flex-shrink-0"
+                  >
+                    <X size={11} />
+                  </button>
                 </div>
               ))}
 

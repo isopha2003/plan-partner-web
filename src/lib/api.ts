@@ -61,6 +61,20 @@ export async function deleteTemplateRow(id: string) {
   await db.execute("DELETE FROM block_templates WHERE id = ?", [id]);
 }
 
+// 캘린더에서 자동 생성된 템플릿의 이름/색을 나중에 사용자가 블록 제목을 바꾸면
+// 함께 갱신할 때 사용. 사용자가 수동으로 만든 템플릿에도 호환됨.
+export async function updateTemplateRow(id: string, changes: { title?: string; color?: string; tags?: string[] }) {
+  const db = await getDb();
+  const sets: string[] = [];
+  const vals: any[] = [];
+  if (changes.title !== undefined) { sets.push("title = ?"); vals.push(changes.title); }
+  if (changes.color !== undefined) { sets.push("color = ?"); vals.push(changes.color); }
+  if (changes.tags !== undefined) { sets.push("tags = ?"); vals.push(JSON.stringify(changes.tags)); }
+  if (sets.length === 0) return;
+  vals.push(id);
+  await db.execute(`UPDATE block_templates SET ${sets.join(", ")} WHERE id = ?`, vals);
+}
+
 // ── blocks ──────────────────────────────────────────────────────
 // SELECT 시 template의 tags를 함께 조인해서 UI가 그대로 쓸 수 있게 함
 const BLOCK_SELECT = `
@@ -133,6 +147,10 @@ export async function patchBlock(id: string, changes: any) {
   if (changes.repeatGroupId !== undefined) push("repeat_group_id", changes.repeatGroupId ?? null);
   if (changes.repeat !== undefined) push("repeat_rule", changes.repeat ? JSON.stringify(changes.repeat) : null);
   if (changes.nextBlockId !== undefined) push("next_block_id", changes.nextBlockId ?? null);
+  // 캘린더에서 자동 생성된 블록이 뒤늦게 템플릿과 연결될 때 patchBlock으로도 저장이
+  // 되어야 함(예전엔 여기서 처리를 안 해서 DB에는 template_id가 NULL로 남아 재시작 후
+  // 태그 상속이 끊기던 문제가 있었음).
+  if (changes.templateId !== undefined) push("template_id", changes.templateId ?? null);
 
   if (sets.length === 0) return;
   vals.push(id);
