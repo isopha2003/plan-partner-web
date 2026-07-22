@@ -3805,6 +3805,10 @@ function BlockDetailPanel({
     if (!tpl) return;
     const [sh, sm] = childStart.split(":").map(Number);
     const [eh, em] = childEnd.split(":").map(Number);
+    // 시간 입력이 비어 있거나 잘못돼 NaN이 나오면 그대로 진행할 경우 DB에 "NaN:undefined:00"
+    // 같은 깨진 문자열이 저장되므로 여기서 방어. NaN 비교는 항상 false이므로 아래 시간
+    // 비교로는 걸러지지 않음.
+    if (![sh, sm, eh, em].every(n => Number.isFinite(n))) return;
     if (eh * 60 + em <= sh * 60 + sm) return;
     onAddTimeblockChild({ templateId: tpl.id, title: tpl.title, color: tpl.color, tags: tpl.tags, startH: sh, startM: sm, endH: eh, endM: em });
     setShowAddTimeblock(false);
@@ -4095,7 +4099,7 @@ function BlockDetailPanel({
                     {et === "count" && (
                       <span className="flex items-center gap-1">
                         <input type="number" min={1} max={99} value={repeatEndCount}
-                          onChange={e => setRepeatEndCount(Number(e.target.value))}
+                          onChange={e => setRepeatEndCount(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
                           onClick={() => setRepeatEndType("count")}
                           className="w-12 px-1.5 py-0.5 text-[11px] rounded bg-muted outline-none focus:ring-1 focus:ring-ring"
                                                  />회 반복 후 종료
