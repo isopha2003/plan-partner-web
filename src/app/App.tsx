@@ -280,6 +280,17 @@ export default function App() {
     try { localStorage.setItem("theme", darkMode ? "dark" : "light"); } catch {}
   }, [darkMode]);
 
+  // 글씨 크기 — 앱 전체 표시 배율(zoom)로 처리. Tailwind는 rem 기반 클래스가 있는 반면
+  // 이 코드베이스엔 text-[11px] 같은 절대 px 클래스도 많아서, font-size로만 조절하면
+  // 일부만 커지고 균형이 깨짐. zoom은 요소 크기·간격·경계까지 비례로 확대해줌.
+  // WebView2(Windows)/WKWebView(macOS) 모두 zoom 지원.
+  type FontSize = "normal" | "larger" | "large";
+  const [fontSize, setFontSize] = usePersistedState<FontSize>("settings_font_size", "normal");
+  useEffect(() => {
+    const zoomMap: Record<FontSize, string> = { normal: "1", larger: "1.10", large: "1.20" };
+    document.documentElement.style.setProperty("zoom", zoomMap[fontSize]);
+  }, [fontSize]);
+
   // Pomodoro / settings — timer effect들이 이 상태를 참조하므로 반드시 그 앞에서 선언돼야 함.
   // localStorage에 저장해 재시작 시에도 유지 — 예전엔 매번 초기값(꺼짐/25/5/꺼짐/15)로
   // 리셋돼서 유저가 앱 켤 때마다 다시 켜야 했음.
@@ -1006,6 +1017,7 @@ export default function App() {
               abandonOn={abandonOn} setAbandonOn={setAbandonOn}
               abandonMin={abandonMin} setAbandonMin={setAbandonMin}
               darkMode={darkMode} setDarkMode={setDarkMode}
+              fontSize={fontSize} setFontSize={setFontSize}
             />
           )}
         </main>
@@ -3663,6 +3675,7 @@ function SettingsSection({
   pomodoroOn, setPomodoroOn, pomWork, setPomWork,
   pomBreak, setPomBreak, abandonOn, setAbandonOn, abandonMin, setAbandonMin,
   darkMode, setDarkMode,
+  fontSize, setFontSize,
 }: {
   pomodoroOn: boolean; setPomodoroOn: (v: boolean) => void;
   pomWork: number; setPomWork: (v: number) => void;
@@ -3670,6 +3683,7 @@ function SettingsSection({
   abandonOn: boolean; setAbandonOn: (v: boolean) => void;
   abandonMin: number; setAbandonMin: (v: number) => void;
   darkMode: boolean; setDarkMode: (v: boolean) => void;
+  fontSize: "normal" | "larger" | "large"; setFontSize: (v: "normal" | "larger" | "large") => void;
 }) {
   // 데이터 백업/업데이트 상태 — JSON export/import UI는 개인용에서 직관적이지 않아 제거,
   // 데이터 이전이 필요할 때는 %APPDATA%/…/backups 폴더의 .db 파일을 직접 복사하면 됨.
@@ -3777,6 +3791,31 @@ function SettingsSection({
               >
                 <span className={`absolute top-1 size-4 rounded-full bg-white shadow transition-all ${darkMode ? "left-5" : "left-1"}`} />
               </button>
+            </div>
+          </div>
+
+          {/* 글씨 크기 — zoom으로 앱 전체 배율을 조정. "보통"이 기본(현재 크기). */}
+          <div className="p-5 rounded-xl border bg-card">
+            <div className="mb-3">
+              <div className="text-sm font-medium">글씨 크기</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">앱 전체 표시 배율</div>
+            </div>
+            <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5">
+              {([
+                { v: "normal" as const, label: "보통" },
+                { v: "larger" as const, label: "살짝 크게" },
+                { v: "large" as const, label: "크게" },
+              ]).map(({ v, label }) => (
+                <button
+                  key={v}
+                  onClick={() => setFontSize(v)}
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md transition-all ${
+                    fontSize === v ? "bg-card shadow-sm font-medium" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
 
