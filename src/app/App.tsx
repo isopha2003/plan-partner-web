@@ -3409,10 +3409,10 @@ function SettingsSection({
               <button
                 onClick={handleBackupNow}
                 disabled={backupBusy}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
+                className="flex-shrink-0 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
               >{backupBusy ? "백업 중…" : "지금 백업"}</button>
               {statusMsg?.target === "backup" && (
-                <span className={`text-[11px] transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
+                <span className={`min-w-0 text-[11px] leading-snug transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
                   {statusMsg.text}
                 </span>
               )}
@@ -3428,10 +3428,10 @@ function SettingsSection({
               <button
                 onClick={handleUpdateCheck}
                 disabled={updateBusy}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
+                className="flex-shrink-0 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground disabled:opacity-50"
               >{updateBusy ? "확인 중…" : "업데이트 확인"}</button>
               {statusMsg?.target === "update" && (
-                <span className={`text-[11px] transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
+                <span className={`min-w-0 text-[11px] leading-snug transition-opacity duration-500 ease-out ${statusVisible ? "opacity-100" : "opacity-0"} ${statusMsg.kind === "ok" ? "text-primary" : "text-destructive"}`}>
                   {statusMsg.text}
                 </span>
               )}

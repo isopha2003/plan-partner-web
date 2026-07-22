@@ -31,9 +31,13 @@ const TABLES = [
 
 type TableName = typeof TABLES[number];
 
+// 백업 파일명 타임스탬프. ms 까지 붙여 같은 초 안에 두 번 눌러도 파일명이 겹치지 않게.
+// VACUUM INTO는 대상 파일이 이미 있으면 실패하므로 초 단위 해상도만으론 rapid click 시
+// 충돌이 남 → ms 자리로 확실히 유니크하게 만듦.
 function tsStamp(d = new Date()) {
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}-${ms}`;
 }
 
 async function ensureBackupDir(): Promise<string> {
