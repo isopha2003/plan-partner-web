@@ -2257,8 +2257,10 @@ function GrassSection({
   totalPlanMin: number;
   focusSecByDate: Record<string, number>;
 }) {
-  const [viewYear, setViewYear] = useState(2026);
-  const [viewMonth, setViewMonth] = useState(6); // 0-indexed, 6 = July
+  // 오늘이 속한 달을 기본값으로 — 이전에 2026/7 하드코드였던 자리. 앱 첫 마운트 시점의
+  // 실제 날짜를 사용해야 배포 후에도 계속 현재 달이 열림.
+  const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
   const [goalMin, setGoalMin] = useState(totalPlanMin);
   const [editingGoal, setEditingGoal] = useState(false);
   const [goalInput, setGoalInput] = useState(String((totalPlanMin / 60).toFixed(1)));
