@@ -868,17 +868,32 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
 
-      {/* ── Custom title bar (decorations:false 상태에서 OS 크롬 대체) ── */}
-      <AppTitleBar />
-
-      {/* ── Global Header ── */}
-      <header className="flex items-center gap-6 px-5 border-b border-border bg-card flex-shrink-0" style={{ height: 52 }}>
-        <div className="flex items-center gap-2.5 flex-shrink-0">
-          <span className="text-[11px] text-muted-foreground hidden sm:block">{TODAY_LABEL}</span>
+      {/* ── Unified header: 앱 이름·날짜 + 타이머 + 달성률 + 창 컨트롤을 한 줄에 통합.
+             decorations:false 상태에서 OS 크롬 대체 겸용 — 빈 영역 드래그로 창 이동,
+             드래그 리전 위에서 더블클릭하면 최대화 토글(Windows 표준 동작). ── */}
+      <header
+        data-tauri-drag-region
+        onDoubleClick={(e) => {
+          if (!(e.target as HTMLElement).hasAttribute("data-tauri-drag-region")) return;
+          const win = getCurrentWindow();
+          win.isMaximized().then(m => (m ? win.unmaximize() : win.maximize())).catch(() => {});
+        }}
+        className="flex items-stretch h-12 border-b border-border bg-card flex-shrink-0"
+      >
+        {/* Left: 앱 아이덴티티 + 오늘 날짜 */}
+        <div data-tauri-drag-region className="flex items-center gap-3 pl-4 pr-3 flex-shrink-0">
+          <div data-tauri-drag-region className="flex items-center gap-2 pointer-events-none">
+            <Clock size={13} className="text-primary" />
+            <span className="text-xs font-semibold text-foreground/85">생활 플래너</span>
+          </div>
+          <span data-tauri-drag-region className="h-4 border-l border-border/70 pointer-events-none hidden sm:block" />
+          <span data-tauri-drag-region className="text-[11px] text-muted-foreground pointer-events-none hidden sm:block">
+            {TODAY_LABEL}
+          </span>
         </div>
 
-        {/* Global timer widget — center of header */}
-        <div className="flex-1 flex justify-center">
+        {/* Center: 타이머 위젯 */}
+        <div className="flex-1 flex items-center justify-center min-w-0">
           <GlobalTimer
             timerState={timerState}
             timerSec={timerSec}
@@ -893,13 +908,17 @@ export default function App() {
           />
         </div>
 
-        {/* Right side: completion summary */}
-        <div className="flex items-center gap-3 flex-shrink-0">
-          <div className="text-[11px] text-muted-foreground text-right hidden md:block">
-            <div>오늘 달성률</div>
-            <div className="font-semibold text-foreground">{completionRate}%</div>
+        {/* Right: 달성률 요약 + 창 컨트롤(min/max/close). 창 컨트롤은 창 오른쪽 모서리에
+            딱 붙어야 Windows Fitts's law상 클릭이 편하므로 여기서 padding 제거. */}
+        <div className="flex items-stretch flex-shrink-0">
+          <div data-tauri-drag-region className="flex items-center gap-2.5 pl-3 pr-3">
+            <div data-tauri-drag-region className="text-[11px] text-muted-foreground text-right hidden md:block pointer-events-none">
+              <div>오늘 달성률</div>
+              <div className="font-semibold text-foreground">{completionRate}%</div>
+            </div>
+            <CircleProgress value={completionRate} size={28} strokeWidth={3} />
           </div>
-          <CircleProgress value={completionRate} size={32} strokeWidth={3} />
+          <WindowControls />
         </div>
       </header>
 
@@ -1084,11 +1103,10 @@ export default function App() {
   );
 }
 
-// ── Custom title bar (Tauri decorations:false 상태에서 OS 크롬 대체) ────
-// 앱 톤에 맞춘 32px 높이 얇은 바 — 좌측 앱 아이콘·이름, 우측 min/max/close 버튼.
-// `data-tauri-drag-region`을 걸어 사용자가 이 영역을 드래그하면 창이 이동함.
-// 더블클릭으로 최대화 토글(Windows 표준 동작).
-function AppTitleBar() {
+// ── Window controls (Tauri decorations:false 상태에서 min/max/close 대체) ────
+// 통합 헤더의 우측 끝에 붙어 창 오른쪽 모서리에 딱 닿음(Windows Fitts's law상 클릭 편의).
+// 최대화 상태는 win.onResized로 감지해 아이콘을 restore-down으로 바꿈.
+function WindowControls() {
   const [isMax, setIsMax] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -1111,38 +1129,28 @@ function AppTitleBar() {
   const btnBase = "h-full w-11 flex items-center justify-center transition-colors text-muted-foreground";
 
   return (
-    <div
-      data-tauri-drag-region
-      onDoubleClick={toggleMax}
-      className="flex items-center justify-between h-8 pl-3 bg-card border-b border-border select-none flex-shrink-0"
-    >
-      <div data-tauri-drag-region className="flex items-center gap-2 pointer-events-none">
-        <Clock size={12} className="text-primary" />
-        <span className="text-[11px] font-medium text-foreground/80">생활 플래너</span>
-      </div>
-      <div className="flex items-stretch h-full">
-        <button
-          onClick={() => getCurrentWindow().minimize().catch(e => console.error("최소화 실패", e))}
-          className={`${btnBase} hover:bg-muted`}
-          aria-label="최소화"
-        >
-          <Minus size={14} />
-        </button>
-        <button
-          onClick={toggleMax}
-          className={`${btnBase} hover:bg-muted`}
-          aria-label={isMax ? "이전 크기로" : "최대화"}
-        >
-          {isMax ? <Copy size={11} /> : <Square size={11} />}
-        </button>
-        <button
-          onClick={() => getCurrentWindow().close().catch(e => console.error("닫기 실패", e))}
-          className={`${btnBase} hover:bg-destructive hover:text-destructive-foreground`}
-          aria-label="닫기"
-        >
-          <X size={14} />
-        </button>
-      </div>
+    <div className="flex items-stretch h-full">
+      <button
+        onClick={() => getCurrentWindow().minimize().catch(e => console.error("최소화 실패", e))}
+        className={`${btnBase} hover:bg-muted`}
+        aria-label="최소화"
+      >
+        <Minus size={14} />
+      </button>
+      <button
+        onClick={toggleMax}
+        className={`${btnBase} hover:bg-muted`}
+        aria-label={isMax ? "이전 크기로" : "최대화"}
+      >
+        {isMax ? <Copy size={11} /> : <Square size={11} />}
+      </button>
+      <button
+        onClick={() => getCurrentWindow().close().catch(e => console.error("닫기 실패", e))}
+        className={`${btnBase} hover:bg-destructive hover:text-destructive-foreground`}
+        aria-label="닫기"
+      >
+        <X size={14} />
+      </button>
     </div>
   );
 }
