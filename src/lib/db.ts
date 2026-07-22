@@ -138,9 +138,15 @@ export function getDb(): Promise<Database> {
       try {
         await db.execute("UPDATE notes SET created_at = updated_at WHERE created_at IS NULL");
       } catch { /* fresh install: notes 아직 없음 */ }
-      // 2) 테이블/인덱스 생성 (IF NOT EXISTS이라 재실행 안전)
+      // 2) 테이블/인덱스 생성 (IF NOT EXISTS이라 재실행 안전).
+      //    개별 statement 실패는 여기서 삼키고 콘솔에만 남김 — 예전엔 이 루프가 통째로
+      //    throw하면 dbPromise 전체가 rejected로 캐시됐다가 리셋되고, 이후 UI에서 어떤
+      //    DB 호출을 하든 즉시 실패해 "블록 추가/삭제/저장 실패" 토스트가 연쇄 발생.
+      //    실제로는 이미 만들어져 있는 테이블/인덱스가 대부분이라 idempotent 하고,
+      //    한 문장이 이상하다고 나머지까지 못 만드는 건 손해가 큼.
       for (const stmt of SCHEMA.split(";").map(s => s.trim()).filter(Boolean)) {
-        await db.execute(stmt);
+        try { await db.execute(stmt); }
+        catch (e) { console.error("schema stmt failed", stmt.slice(0, 80), e); }
       }
       return db;
     })();

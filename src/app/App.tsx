@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  fetchTemplates, createTemplate, deleteTemplateRow, updateTemplateRow, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
+  fetchTemplates, createTemplate, deleteTemplateRow, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, deleteRepeatInstancesExceptOrigin, insertBlocksBulk,
   fetchDeadlines, createDeadline, toggleDeadlineRow, deleteDeadlineRow,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
@@ -598,39 +598,18 @@ export default function App() {
 
   // Optimistic insert: shows instantly with a temp id, then swapped for the real DB row.
   // openInline은 캘린더 클릭으로 만든 이름 없는 블록 — 상세 패널을 곧바로 띄우고 제목 편집에
-  // 포커스를 주며, 매칭 템플릿을 즉시 사이드바에 자동 추가함(justCreatedBlockId로 추적해서
-  // 나중에 사용자가 제목을 바꾸면 그 템플릿의 이름도 함께 갱신). 예전엔 제목이 저장되는
-  // 시점에만 템플릿을 만들어서, 사용자가 이름을 안 바꾸고 그대로 두면 캘린더 위에만 남고
-  // 사이드바에 등록되지 않아 다음 날짜에 재사용할 수 없던 문제 수정.
+  // 포커스를 줌. 사이드바 템플릿 자동 등록은 하지 않음(사용자 요청): 캘린더에서 그린 블록은
+  // 그날 그 자리에만 쓰이는 일회성이 대부분이라, 매번 사이드바에 "새 블록"류 템플릿이
+  // 쌓이면 오히려 지저분해짐. 재사용이 필요하면 사이드바의 "+ 새 템플릿"으로 명시적으로 등록.
   // 이 경로에선 낙관적 temp id 없이 DB 저장을 기다렸다가 진짜 id로 시작 — 안 그러면 temp→real
   // 스왑 시 상세 패널(key={id})이 리마운트되며 사용자가 입력 중이던 제목이 날아감.
   const addBlock = (block: Block, options?: { select?: boolean; openInline?: boolean }) => {
     if (options?.select || options?.openInline) {
       insertBlock(block)
-        .then(async real => {
+        .then(real => {
           setBlocks(bs => [...bs, real]);
-          if (options.openInline) {
-            // 매칭 템플릿을 먼저 만들어 templateId까지 붙인 뒤에 상세 패널을 오픈.
-            // 이렇게 하면 사용자가 초 단위로 빠르게 제목을 입력해도, onTitleSave가
-            // 실행되는 시점에 selectedBlock.templateId가 이미 세팅돼 있어서 rename
-            // 브랜치로 들어가고 중복 템플릿이 생성되지 않음.
-            try {
-              const tpl = await createTemplate({ title: real.title, color: real.color, tags: real.tags ?? [] });
-              setTemplates(ts => [...ts, tpl]);
-              const linked = { ...real, templateId: tpl.id };
-              setBlocks(bs => bs.map(b => b.id === real.id ? linked : b));
-              setSelectedBlock(linked);
-              setJustCreatedBlockId(real.id);
-              patchBlock(real.id, { templateId: tpl.id }).catch(notifyError("템플릿 연결 저장 실패"));
-            } catch (e) {
-              // 템플릿 생성이 실패해도 블록 자체는 정상이므로 패널은 그대로 열어줌.
-              notifyError("템플릿 자동 생성 실패")(e);
-              setSelectedBlock(real);
-              setJustCreatedBlockId(real.id);
-            }
-          } else {
-            setSelectedBlock(real);
-          }
+          setSelectedBlock(real);
+          if (options.openInline) setJustCreatedBlockId(real.id);
         })
         .catch(notifyError("블록 추가 실패"));
       return;
@@ -1044,42 +1023,26 @@ export default function App() {
               setSelectedBlock({ ...selectedBlock, memo });
             }}
             onColorSave={(color) => {
-              const wasJustCreated = selectedBlock.id === justCreatedBlockId;
+              // 블록 색만 저장. 사이드바 템플릿과의 자동 동기화는 없음 —
+              // 캘린더에서 만든 블록은 이제 템플릿을 만들지 않고, 템플릿 픽커에서 뽑아온
+              // 블록의 색을 바꾼다고 원본 템플릿까지 바꾸는 건 사용자 기대와 어긋남
+              // (템플릿은 "출발 레시피"라 인스턴스가 그걸 소급 수정하지 않아야 함).
               updateBlock(selectedBlock.id, { color });
               setSelectedBlock({ ...selectedBlock, color });
-              // 방금 만든 블록의 자동 템플릿은 아직 사용자가 다듬는 중이므로 색도 함께 동기화.
-              // 안 그러면 유저가 색을 바꿔도 사이드바 템플릿은 원본 색이라 나중에 드래그하면
-              // 자기가 지정한 색이 아닌 원본 색으로 블록이 생성돼 헷갈림.
-              if (wasJustCreated && selectedBlock.templateId) {
-                const tplId = selectedBlock.templateId;
-                setTemplates(ts => ts.map(t => t.id === tplId ? { ...t, color } : t));
-                updateTemplateRow(tplId, { color }).catch(notifyError("템플릿 색 저장 실패"));
-              }
             }}
             paletteColors={paletteColors}
             onAddPaletteColor={addPaletteColor}
             onRemovePaletteColor={removePaletteColor}
             onTitleSave={(title) => {
-              const wasJustCreated = selectedBlock.id === justCreatedBlockId;
+              // 블록 제목만 저장. 사이드바 템플릿 자동 생성/이름 동기화는 하지 않음 —
+              // 캘린더에서 만든 블록은 그날 그 자리에만 쓰이는 일회성인 경우가 많고,
+              // 매번 사이드바에 템플릿이 쌓이면 오히려 번잡. 재사용이 필요하면 사이드바의
+              // "+ 새 템플릿"으로 명시적으로 등록하면 됨.
               updateBlock(selectedBlock.id, { title });
               setSelectedBlock({ ...selectedBlock, title });
-              // 캘린더에서 방금 만든 블록은 addBlock(openInline)에서 매칭 템플릿이 이미
-              // 만들어져 templateId로 연결돼 있음. 이 경우 그 템플릿 이름도 함께 갱신.
-              // 예외 대비로 만약 아직 연결이 없다면 여기서 만들어줌(레거시 데이터/실패 복구).
-              if (wasJustCreated) {
-                const tplId = selectedBlock.templateId;
-                if (tplId) {
-                  setTemplates(ts => ts.map(t => t.id === tplId ? { ...t, title } : t));
-                  updateTemplateRow(tplId, { title }).catch(notifyError("템플릿 이름 저장 실패"));
-                } else {
-                  createTemplate({ title, color: selectedBlock.color, tags: selectedBlock.tags })
-                    .then(tpl => {
-                      setTemplates(ts => [...ts, tpl]);
-                      updateBlock(selectedBlock.id, { templateId: tpl.id });
-                      setSelectedBlock(prev => (prev && prev.id === selectedBlock.id ? { ...prev, templateId: tpl.id } : prev));
-                    })
-                    .catch(notifyError("템플릿 자동 생성 실패"));
-                }
+              // 최초 진입 후 첫 저장이 끝나면 "방금 만든" 플래그를 해제 — 이 이후엔 상세
+              // 패널이 리마운트될 때 자동 편집 모드로 뜨지 않도록.
+              if (selectedBlock.id === justCreatedBlockId) {
                 setJustCreatedBlockId(prev => (prev === selectedBlock.id ? null : prev));
               }
             }}
