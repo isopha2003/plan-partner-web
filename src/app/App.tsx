@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import {
   fetchTemplates, createTemplate, deleteTemplateRow, updateTemplateRow, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
-  deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, insertBlocksBulk,
+  deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, deleteRepeatInstancesExceptOrigin, insertBlocksBulk,
   fetchDeadlines, createDeadline, toggleDeadlineRow, deleteDeadlineRow,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
   fetchTodaySessions, startTimerSession, endTimerSession, deleteTodaySessions, fetchFocusSecByDate,
@@ -651,16 +651,33 @@ export default function App() {
       });
     };
 
+    // 종료 조건별 상한:
+    //  - count: 요청한 횟수를 정확히 채우도록 상한 계산
+    //  - date : 종료 날짜까지 실제 커버할 수 있도록 상한 크게(내부 early break가 종료일에서 끊음)
+    //  - none : 앞으로 보여줄 기본 롤링 윈도우(daily 14일 / weekly 8주)
+    // 예전엔 daily/weekly 모두 상한이 14일 / 8주로 고정돼서, 사용자가 '30회 반복' 이나
+    // '3개월 후까지'를 골라도 그 안에서만 인스턴스가 만들어지고 나머지가 소리 없이 잘리는
+    // 문제가 있었음.
     if (repeat.type === "daily") {
-      const maxDays = repeat.endType === "count" ? repeat.endCount : 14;
+      const maxDays = repeat.endType === "count"
+        ? repeat.endCount
+        : repeat.endType === "date"
+          ? 365
+          : 14;
       for (let i = 1; i <= maxDays && (repeat.endType !== "count" || instances.length < repeat.endCount); i++) {
         const d = new Date(origin); d.setDate(origin.getDate() + i);
         if (repeat.endType === "date" && toDateStr(d) > repeat.endDate) break;
         pushInstance(d, i);
       }
     } else {
+      const daysPerWeek = Math.max(1, repeat.days.length);
+      const maxWeeks = repeat.endType === "count"
+        ? Math.ceil(repeat.endCount / daysPerWeek)
+        : repeat.endType === "date"
+          ? 53
+          : 8;
       let count = 0;
-      for (let week = 1; week <= 8; week++) {
+      for (let week = 1; week <= maxWeeks; week++) {
         for (const day of repeat.days.slice().sort()) {
           if (repeat.endType === "count" && count >= repeat.endCount) break;
           const d = new Date(origin);
@@ -694,6 +711,9 @@ export default function App() {
     (async () => {
       try {
         await patchBlock(id, { repeat, repeatGroupId: groupId });
+        // 재저장 시 이전 규칙으로 만든 인스턴스가 DB에 남아있으면 새/구가 섞이므로 먼저 정리.
+        // origin은 유지하고 그룹의 나머지만 삭제한 뒤 새 인스턴스를 insert.
+        await deleteRepeatInstancesExceptOrigin(groupId, id);
         if (instances.length) await insertBlocksBulk(instances);
         await refetchBlocks();
       } catch (e) {

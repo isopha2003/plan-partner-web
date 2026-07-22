@@ -170,6 +170,17 @@ export async function deleteBlocksByRepeatGroup(repeatGroupId: string, fromDate:
   );
 }
 
+// 같은 반복 그룹의 origin(=사용자가 편집 중인 블록)을 제외한 모든 인스턴스 삭제.
+// setBlockRepeat가 규칙을 재저장할 때 사용 — 예전엔 이 정리 없이 새 인스턴스만 insert해서
+// 이전 규칙으로 만든 인스턴스가 DB에 그대로 남아 refetch 시 새/구 인스턴스가 함께 나타남.
+export async function deleteRepeatInstancesExceptOrigin(repeatGroupId: string, originId: string) {
+  const db = await getDb();
+  await db.execute(
+    "DELETE FROM blocks WHERE repeat_group_id = ? AND id != ?",
+    [repeatGroupId, originId]
+  );
+}
+
 export async function insertBlocksBulk(blocks: any[]) {
   if (blocks.length === 0) return [];
   const db = await getDb();
