@@ -169,6 +169,23 @@ function syncTodayIfChanged(): boolean {
   return true;
 }
 
+// localStorage에 JSON으로 값을 저장/복원하는 useState 래퍼. darkMode/팔레트 색상처럼
+// 재시작 후에도 유지돼야 하는 설정에 사용. 파싱 실패나 저장 실패는 조용히 무시하고
+// 초기값으로 폴백 — 개인용 앱이라 스토리지 격리 이슈까지 방어할 필요는 없음.
+function usePersistedState<T>(key: string, initial: T): [T, React.Dispatch<React.SetStateAction<T>>] {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw !== null) return JSON.parse(raw) as T;
+    } catch {}
+    return initial;
+  });
+  useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }, [key, value]);
+  return [value, setValue];
+}
+
 // ── App ────────────────────────────────────────────────────────────
 export default function App() {
   const [section, setSection] = useState<Section>("today");
@@ -254,12 +271,14 @@ export default function App() {
     try { localStorage.setItem("theme", darkMode ? "dark" : "light"); } catch {}
   }, [darkMode]);
 
-  // Pomodoro / settings — timer effect들이 이 상태를 참조하므로 반드시 그 앞에서 선언돼야 함
-  const [pomodoroOn, setPomodoroOn] = useState(false);
-  const [pomWork, setPomWork] = useState(25);
-  const [pomBreak, setPomBreak] = useState(5);
-  const [abandonOn, setAbandonOn] = useState(false);
-  const [abandonMin, setAbandonMin] = useState(15);
+  // Pomodoro / settings — timer effect들이 이 상태를 참조하므로 반드시 그 앞에서 선언돼야 함.
+  // localStorage에 저장해 재시작 시에도 유지 — 예전엔 매번 초기값(꺼짐/25/5/꺼짐/15)로
+  // 리셋돼서 유저가 앱 켤 때마다 다시 켜야 했음.
+  const [pomodoroOn, setPomodoroOn] = usePersistedState("settings_pomodoro_on", false);
+  const [pomWork, setPomWork] = usePersistedState("settings_pom_work", 25);
+  const [pomBreak, setPomBreak] = usePersistedState("settings_pom_break", 5);
+  const [abandonOn, setAbandonOn] = usePersistedState("settings_abandon_on", false);
+  const [abandonMin, setAbandonMin] = usePersistedState("settings_abandon_min", 15);
 
   // 뽀모도로 사이클 상태 — timerState="running"이고 pomodoroOn=true일 때만 의미
   // pomPhase: 지금 집중 중인지 휴식 중인지. pomPhaseSec: 현재 phase에서 흐른 초.
