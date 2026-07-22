@@ -5,13 +5,31 @@ import { getDb } from "./db";
 // booleans as 0/1 INTEGERs. The UI works with separate startH/startM/endH/endM numbers,
 // boolean flags, and parsed JSON objects.
 const parseTime = (t: string) => {
-  const [h, m] = t.split(":").map(Number);
-  return { h, m };
+  // 손상된 값이 들어오더라도 NaN이 UI로 흘러가지 않게 방어(NaN 시간은 폭 계산·비교
+  // 어디에서도 정상적으로 처리되지 않아 캘린더가 조용히 깨짐).
+  const [h, m] = (t || "").split(":").map(Number);
+  return {
+    h: Number.isFinite(h) ? h : 0,
+    m: Number.isFinite(m) ? m : 0,
+  };
 };
 const toTime = (h: number, m: number) => `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
 const uuid = () => crypto.randomUUID();
-const jsonOrNull = (s: any) => (s ? JSON.parse(s) : null);
-const jsonOrEmpty = (s: any) => (s ? JSON.parse(s) : []);
+// 손상된 JSON을 만나도 전체 fetch가 무너지지 않도록 방어. 예전엔 tags/repeat_rule의
+// JSON이 하나라도 깨져 있으면 JSON.parse가 throw해 fetchTemplates/fetchBlocks 전체가
+// 실패하면서 로드 에러 화면이 뜨고 앱을 못 쓰게 되던 문제. 손상된 값은 조용히
+// null/빈배열로 폴백해 최대한 부분 로드라도 되게 함.
+const jsonOrNull = (s: any) => {
+  if (!s) return null;
+  try { return JSON.parse(s); } catch { return null; }
+};
+const jsonOrEmpty = (s: any) => {
+  if (!s) return [];
+  try {
+    const parsed = JSON.parse(s);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+};
 
 export function rowToBlock(row: any) {
   const start = parseTime(row.start_time);
