@@ -886,8 +886,9 @@ export default function App() {
           </div>
         </div>
 
-        {/* Center: 타이머 위젯 */}
-        <div className="flex-1 flex items-center justify-center min-w-0">
+        {/* Center: 타이머 위젯 + 컴팩트 달성률 배지.
+             달성률은 원래 오른쪽 별도 블록에 있었는데 타이머 옆으로 옮겨 시선 이동을 줄임. */}
+        <div className="flex-1 flex items-center justify-center gap-2 min-w-0">
           <GlobalTimer
             timerState={timerState}
             timerSec={timerSec}
@@ -900,6 +901,13 @@ export default function App() {
             pomPhaseRemainSec={Math.max(0, (pomPhase === "focus" ? pomWork : pomBreak) * 60 - pomPhaseSec)}
             floatWin={floatWin}
           />
+          <div
+            title="오늘 달성률"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-muted/40 border border-border"
+          >
+            <CircleProgress value={completionRate} size={16} strokeWidth={2.5} />
+            <span className="text-[11px] font-medium tabular-nums text-foreground/85">{completionRate}%</span>
+          </div>
         </div>
 
         {/* Right: 창 컨트롤(min/max/close). Fitts's law상 오른쪽 모서리에 딱 붙어야 클릭이 편하므로
@@ -1441,20 +1449,7 @@ function TodaySection({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-xl mx-auto px-8 py-8">
-        {/* Header — 타이틀/날짜는 사이드바 탭 라벨과 좌상단 로고로 이미 맥락이 잡히므로 생략.
-             달성률 요약만 우측에 남겨서 오늘 진행 상황을 한눈에 볼 수 있게. */}
-        <div className="flex items-start justify-end mb-8">
-          <div className="flex items-center gap-3">
-            <div className="text-right">
-              <div className="text-[11px] text-muted-foreground">달성률</div>
-              <div className="text-2xl font-semibold leading-none mt-0.5">
-                {completionRate}%
-              </div>
-              <div className="text-[11px] text-muted-foreground mt-0.5">{done}/{blocks.length}</div>
-            </div>
-            <CircleProgress value={completionRate} size={56} />
-          </div>
-        </div>
+        {/* 오늘 달성률은 상단 헤더 타이머 옆 배지로 대체 — 여기선 별도 요약을 두지 않음. */}
 
         {/* Overdue deadlines — shown inline with warning */}
         {overdueDeadlines.length > 0 && (
@@ -2427,7 +2422,7 @@ function DeadlinesSection({
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-xl mx-auto px-8 py-8">
+      <div className="max-w-xl mx-auto px-8 pt-16 pb-8">
         {overdue.length > 0 && (
           <div className="mb-7">
             <div className="flex items-center gap-2 mb-3">
@@ -3136,22 +3131,25 @@ function NoteList({
 }) {
   const [sortMode, setSortMode] = useState<SortMode>("custom");
   const [sortOpen, setSortOpen] = useState(false);
-  const [activeFolderId, setActiveFolderId] = useState<string | null | "all">("all");
+  // viewFolderId: null이면 루트 뷰(폴더 카드 + 폴더 없는 노트), 폴더 id면 그 폴더의 노트만 노출.
+  // 예전엔 "전체 / 폴더 없음 / 각 폴더" 필터 칩 바가 있었는데, 폴더 자체를 리스트 아이템으로
+  // 두고 클릭으로 진입하는 파일탐색기 스타일이 더 직관적이라 그렇게 재설계.
+  const [viewFolderId, setViewFolderId] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [menuNoteId, setMenuNoteId] = useState<string | null>(null);
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [newFolderColor, setNewFolderColor] = useState(FOLDER_COLORS[0]);
-  const [dropFolderId, setDropFolderId] = useState<string | null | "root">(null); // 드래그 오버 중인 폴더
+  // 드래그 오버 중인 대상: 특정 폴더 id, "back"(뒤로가기 = 루트로 이동), null(없음)
+  const [dropFolderId, setDropFolderId] = useState<string | "back" | null>(null);
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
 
   const categories = Array.from(new Set(notes.map(n => n.category).filter(Boolean)));
+  const currentFolder = viewFolderId ? folders.find(f => f.id === viewFolderId) ?? null : null;
 
-  // 필터
+  // 필터: 현재 뷰(루트=null 또는 특정 폴더)의 노트만 노출.
   let shown = notes.filter(n => {
-    if (activeFolderId === "all") { /* 전체 */ }
-    else if (activeFolderId === null) { if (n.folderId !== null) return false; }
-    else if (n.folderId !== activeFolderId) return false;
+    if (n.folderId !== viewFolderId) return false;
     if (activeCategory && n.category !== activeCategory) return false;
     return true;
   });
@@ -3186,7 +3184,7 @@ function NoteList({
   };
 
   const handleDeleteFolder = async (folderId: string) => {
-    if (activeFolderId === folderId) setActiveFolderId("all");
+    if (viewFolderId === folderId) setViewFolderId(null);
     try { await deleteFolder(folderId); await Promise.all([refreshFolders(), refreshNotes()]); } catch (e) { notifyError("폴더 삭제 실패")(e); }
   };
 
@@ -3216,7 +3214,7 @@ function NoteList({
             <div className="relative">
               <button
                 onClick={e => { e.stopPropagation(); setSortOpen(v => !v); }}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-card text-xs hover:bg-muted transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border bg-card text-xs hover:bg-muted transition-colors"
               >
                 <ArrowUpDown size={13} /> {SORT_LABELS[sortMode]}
               </button>
@@ -3239,13 +3237,13 @@ function NoteList({
             </div>
             <button
               onClick={() => setShowNewFolder(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-card text-xs hover:bg-muted transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border bg-card text-xs hover:bg-muted transition-colors"
             >
               <FolderPlus size={13} /> 새 폴더
             </button>
             <button
               onClick={onCreateNote}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity"
             >
               <Plus size={13} /> 새 메모
             </button>
@@ -3280,36 +3278,29 @@ function NoteList({
           </div>
         )}
 
-        {/* 폴더 필터 바 (드롭 타깃) */}
-        <div className="flex flex-wrap items-center gap-2 mb-3">
-          <FolderChip
-            label="전체" count={notes.length} active={activeFolderId === "all"}
-            onClick={() => setActiveFolderId("all")}
-          />
-          <FolderChip
-            label="폴더 없음" count={notes.filter(n => !n.folderId).length}
-            active={activeFolderId === null}
-            isDropTarget={dropFolderId === "root"}
-            onClick={() => setActiveFolderId(null)}
-            onDragOver={e => { e.preventDefault(); setDropFolderId("root"); }}
-            onDragLeave={() => setDropFolderId(null)}
-            onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData("noteId"); if (id) handleMoveNote(id, null); setDropFolderId(null); }}
-          />
-          {folders.map(f => (
-            <FolderChip
-              key={f.id}
-              label={f.name} color={f.color}
-              count={notes.filter(n => n.folderId === f.id).length}
-              active={activeFolderId === f.id}
-              isDropTarget={dropFolderId === f.id}
-              onClick={() => setActiveFolderId(f.id)}
-              onDelete={() => handleDeleteFolder(f.id)}
-              onDragOver={e => { e.preventDefault(); setDropFolderId(f.id); }}
+        {/* 폴더 안에 들어와 있으면 뒤로가기 헤더 노출. 뒤로가기 버튼은 노트를 드래그해서
+             드롭하면 루트로 꺼내는 드롭 타깃 역할도 겸함 — 폴더에서 밖으로 옮길 때 컨텍스트
+             메뉴를 굳이 안 열어도 되도록. */}
+        {currentFolder && (
+          <div className="mb-4 flex items-center gap-2">
+            <button
+              onClick={() => setViewFolderId(null)}
+              onDragOver={e => { if (dragNoteId) { e.preventDefault(); setDropFolderId("back"); } }}
               onDragLeave={() => setDropFolderId(null)}
-              onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData("noteId"); if (id) handleMoveNote(id, f.id); setDropFolderId(null); }}
-            />
-          ))}
-        </div>
+              onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData("noteId"); if (id) handleMoveNote(id, null); setDropFolderId(null); setViewFolderId(null); }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs transition-colors ${
+                dropFolderId === "back" ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-border bg-card hover:bg-muted"
+              }`}
+            >
+              <ArrowLeft size={13} /> 뒤로
+            </button>
+            <div className="flex items-center gap-1.5 text-sm">
+              <span className="size-2.5 rounded-full" style={{ backgroundColor: currentFolder.color }} />
+              <span className="font-medium">{currentFolder.name}</span>
+              <span className="text-[11px] text-muted-foreground">{shown.length}</span>
+            </div>
+          </div>
+        )}
 
         {/* 카테고리 필터 칩 */}
         {categories.length > 0 && (
@@ -3329,13 +3320,31 @@ function NoteList({
           </div>
         )}
 
-        {/* 노트 목록 */}
-        {shown.length === 0 ? (
+        {/* 목록: 루트 뷰에선 폴더 카드가 노트 위에 먼저 나오고, 폴더 안에선 노트만.
+             폴더 카드에 노트를 드래그하면 그 폴더로 이동. */}
+        {shown.length === 0 && (viewFolderId !== null || folders.length === 0) ? (
           <div className="text-center py-16 text-sm text-muted-foreground">
-            {notes.length === 0 ? "아직 메모가 없어요. \"새 메모\"로 첫 메모를 만들어보세요." : "이 조건에 해당하는 메모가 없어요."}
+            {notes.length === 0 && folders.length === 0
+              ? "아직 메모가 없어요. \"새 메모\"로 첫 메모를 만들어보세요."
+              : viewFolderId !== null
+              ? "이 폴더에는 아직 메모가 없어요. 다른 메모를 여기로 드래그해 옮길 수 있어요."
+              : "이 조건에 해당하는 메모가 없어요."}
           </div>
         ) : (
           <div className="space-y-2">
+            {viewFolderId === null && folders.map(f => (
+              <FolderCard
+                key={f.id}
+                folder={f}
+                count={notes.filter(n => n.folderId === f.id).length}
+                isDropTarget={dropFolderId === f.id}
+                onOpen={() => setViewFolderId(f.id)}
+                onDelete={() => handleDeleteFolder(f.id)}
+                onDragOver={e => { if (dragNoteId) { e.preventDefault(); setDropFolderId(f.id); } }}
+                onDragLeave={() => setDropFolderId(null)}
+                onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData("noteId"); if (id) handleMoveNote(id, f.id); setDropFolderId(null); }}
+              />
+            ))}
             {shown.map(n => (
               <NoteCard
                 key={n.id}
@@ -3360,36 +3369,40 @@ function NoteList({
   );
 }
 
-function FolderChip({
-  label, count, color, active, isDropTarget, onClick, onDelete, onDragOver, onDragLeave, onDrop,
+// 노트 리스트 안에 폴더를 카드로 노출. NoteCard와 시각 언어를 맞춰(rounded-xl, p-4, border)
+// 같은 리스트에 섞여도 위화감이 없게 함. 드래그된 노트가 위에 오면 primary 링으로 강조하고,
+// 클릭하면 폴더 안으로 진입. hover 시 우측에 삭제 버튼 노출.
+function FolderCard({
+  folder, count, isDropTarget, onOpen, onDelete, onDragOver, onDragLeave, onDrop,
 }: {
-  label: string; count: number; color?: string;
-  active: boolean; isDropTarget?: boolean;
-  onClick: () => void; onDelete?: () => void;
-  onDragOver?: (e: React.DragEvent) => void;
-  onDragLeave?: (e: React.DragEvent) => void;
-  onDrop?: (e: React.DragEvent) => void;
+  folder: NoteFolder; count: number; isDropTarget: boolean;
+  onOpen: () => void; onDelete: () => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: (e: React.DragEvent) => void;
+  onDrop: (e: React.DragEvent) => void;
 }) {
   return (
     <div
-      onClick={onClick}
+      onClick={onOpen}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      className={`group/chip flex items-center gap-1.5 pl-2.5 pr-2 py-1.5 rounded-lg border text-xs cursor-pointer transition-all ${
-        isDropTarget ? "border-primary bg-primary/10 ring-1 ring-primary" :
-        active ? "border-primary/50 bg-primary/5 text-foreground" : "border-border bg-card text-muted-foreground hover:text-foreground"
+      className={`group/folder relative flex items-center gap-3 p-4 rounded-xl border bg-card hover:border-primary/40 hover:shadow-sm transition-all cursor-pointer ${
+        isDropTarget ? "border-primary bg-primary/10 ring-1 ring-primary" : ""
       }`}
     >
-      {color ? <span className="size-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} /> : <Folder size={12} />}
-      <span className="font-medium">{label}</span>
-      <span className="text-[10px] opacity-60">{count}</span>
-      {onDelete && (
-        <button
-          onClick={e => { e.stopPropagation(); onDelete(); }}
-          className="opacity-0 group-hover/chip:opacity-100 transition-opacity text-muted-foreground hover:text-destructive ml-0.5"
-        ><X size={11} /></button>
-      )}
+      <div className="flex-shrink-0 flex items-center justify-center size-9 rounded-lg" style={{ backgroundColor: folder.color + "22" }}>
+        <Folder size={16} style={{ color: folder.color }} fill={folder.color} fillOpacity={0.35} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate">{folder.name}</div>
+        <div className="text-[11px] text-muted-foreground mt-0.5">{count}개 메모</div>
+      </div>
+      <button
+        onClick={e => { e.stopPropagation(); onDelete(); }}
+        title="폴더 삭제"
+        className="opacity-0 group-hover/folder:opacity-100 transition-opacity p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+      ><Trash2 size={13} /></button>
     </div>
   );
 }
@@ -3682,7 +3695,7 @@ function SettingsSection({
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-lg mx-auto px-8 py-8">
+      <div className="max-w-lg mx-auto px-8 pt-16 pb-8">
         <div className="space-y-4">
           <div className="p-5 rounded-xl border bg-card">
             <div className="flex items-center justify-between">
