@@ -117,10 +117,12 @@ const NOTE_UPGRADES = [
 let dbPromise: Promise<Database> | null = null;
 
 // 첫 호출 시 DB 파일 열고 스키마 초기화, 이후 호출은 같은 인스턴스 반환.
-// 시드 데이터는 넣지 않음 — 첫 실행은 완전히 빈 상태에서 시작
+// 시드 데이터는 넣지 않음 — 첫 실행은 완전히 빈 상태에서 시작.
+// 실패 시 dbPromise를 null로 리셋 — 안 그러면 rejected promise가 영구 캐시돼서
+// 첫 시도 실패 후 다시는 DB 접근이 안 됨(모든 호출이 캐시된 실패 promise를 그대로 반환).
 export function getDb(): Promise<Database> {
   if (!dbPromise) {
-    dbPromise = (async () => {
+    const p: Promise<Database> = (async () => {
       const db = await Database.load("sqlite:planner.db");
       // 1) 구버전 notes 테이블이 있으면 먼저 컬럼 업그레이드. SCHEMA의 CREATE INDEX가
       //    notes(folder_id)를 참조하므로, 인덱스 생성 전에 folder_id가 있어야 함.
@@ -138,6 +140,8 @@ export function getDb(): Promise<Database> {
       }
       return db;
     })();
+    dbPromise = p;
+    p.catch(() => { if (dbPromise === p) dbPromise = null; });
   }
   return dbPromise;
 }
