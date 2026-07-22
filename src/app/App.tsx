@@ -1451,8 +1451,12 @@ function TodaySection({
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-xl mx-auto px-8 py-8">
-        {/* 오늘 달성률은 상단 헤더 타이머 옆 배지로 대체 — 여기선 별도 요약을 두지 않음. */}
+      <div className="max-w-xl mx-auto px-8 pt-16 pb-8">
+        {/* 오늘 달성률은 상단 헤더 타이머 옆 배지로 대체 — 여기선 별도 요약을 두지 않음.
+             대신 이 페이지가 "오늘" 시점임을 상기시키는 작은 날짜 라벨만 얹음. */}
+        <div className="text-[11px] text-muted-foreground mb-6">
+          {`${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`}
+        </div>
 
         {/* Overdue deadlines — shown inline with warning */}
         {overdueDeadlines.length > 0 && (
