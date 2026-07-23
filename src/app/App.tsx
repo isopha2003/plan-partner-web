@@ -2177,7 +2177,9 @@ function CalendarSection({
   const [marquee, setMarquee] = useState<{ startX: number; startY: number; curX: number; curY: number } | null>(null);
   const timeGridRef = useRef<HTMLDivElement>(null);
   // 일/주 뷰 콘텐츠 모드 — grid(시간표만) / todos(일정만) / both(위 시간표 + 아래 일정 리스트).
-  const [contentView, setContentView] = useState<"grid" | "todos" | "both">("both");
+  // 사용자가 마지막으로 켜둔 시간표/할 일 상태를 세션 간에 유지. useState 로 두면
+  // CalendarSection 이 다른 탭 이동 시 언마운트돼 값이 "both" 로 리셋되던 문제.
+  const [contentView, setContentView] = usePersistedState<"grid" | "todos" | "both">("cal_content_view", "both");
   // both 뷰에서 상단(시간표) 비율 — 하단(일정) 은 1 - splitRatio. 사용자가 경계선을 드래그해서 조정.
   const [splitRatio, setSplitRatio] = useState(0.6);
   const bothContainerRef = useRef<HTMLDivElement>(null);
