@@ -3624,11 +3624,12 @@ function TodoPanel({
                   <span className={`flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : "text-red-700"}`}>{d.title}</span>
                 </div>
               ))}
-              {/* 할 일 — 시간표 블록과 동일한 형태(왼쪽 색 스트라이프 + 제목 + 우측 삭제).
-                    드래그로 다른 컬럼(날짜) 으로 옮기거나 다른 todo 위에 드랍하면 자리를 교체. */}
+              {/* 할 일 — 시간 블록과 시각적으로 동일. 색상 배경(color+28) + 왼쪽 3px 스트라이프
+                    + 컬러 타이틀 텍스트. hover 시 우측 상단에 완료 토글/삭제 아이콘.
+                    본문 클릭으로 인라인 편집, 시간 블록과 마찬가지로 드래그로 이동/스왑. */}
               {dayTodos.map(t => (
                 <div key={t.id}
-                  draggable={!!onMoveTodo}
+                  draggable={!!onMoveTodo && editingId !== t.id}
                   onDragStart={e => {
                     if (!onMoveTodo) return;
                     e.dataTransfer.setData("todoId", t.id);
@@ -3656,25 +3657,16 @@ function TodoPanel({
                     onSwapTodo(otherId, t.id);
                     setDragTodoId(null); setSwapTargetId(null);
                   }}
-                  className={`group/todo flex items-center gap-2 px-2 py-1.5 rounded-md border text-[11px] transition-colors ${
-                    onMoveTodo ? "cursor-grab active:cursor-grabbing" : ""
+                  className={`group/todo relative rounded-md overflow-hidden text-[11px] transition-all ${
+                    onMoveTodo && editingId !== t.id ? "cursor-grab active:cursor-grabbing" : ""
                   } ${
-                    t.completed ? "bg-muted/40 border-transparent opacity-60"
-                      : swapTargetId === t.id ? "bg-primary/10 border-primary ring-1 ring-primary/40"
-                      : dragTodoId === t.id ? "bg-card border-primary/40 opacity-50"
-                      : "bg-card border-border hover:border-primary/40"
+                    t.completed ? "opacity-60"
+                      : swapTargetId === t.id ? "ring-2 ring-primary ring-offset-1"
+                      : dragTodoId === t.id ? "opacity-50"
+                      : "hover:brightness-95"
                   }`}
+                  style={{ backgroundColor: t.color + "28", borderLeft: `3px solid ${t.color}` }}
                 >
-                  <button
-                    onClick={() => onToggle(t.id)}
-                    className="flex-shrink-0"
-                    title={t.completed ? "완료 해제" : "완료 처리"}
-                  >
-                    {t.completed
-                      ? <CheckCircle2 size={13} style={{ color: t.color }} />
-                      : <Circle size={13} className="text-muted-foreground" />}
-                  </button>
-                  <span className="w-0.5 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} />
                   {editingId === t.id ? (
                     <input
                       autoFocus
@@ -3685,19 +3677,33 @@ function TodoPanel({
                         if (e.key === "Enter") { onUpdateTitle(t.id, editingDraft.trim() || t.title); setEditingId(null); }
                         else if (e.key === "Escape") setEditingId(null);
                       }}
-                      className="flex-1 min-w-0 bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-1"
+                      className="w-full bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-2 py-1.5 font-semibold"
+                      style={{ color: t.color }}
                     />
                   ) : (
                     <button
                       onClick={() => { setEditingDraft(t.title); setEditingId(t.id); }}
-                      className={`flex-1 min-w-0 text-left truncate ${t.completed ? "line-through text-muted-foreground" : ""}`}
+                      className={`w-full min-w-0 text-left truncate px-2 py-1.5 font-semibold ${t.completed ? "line-through" : ""}`}
+                      style={{ color: t.color }}
                     >{t.title}</button>
                   )}
-                  <button
-                    onClick={() => onDelete(t.id)}
-                    className="opacity-0 group-hover/todo:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-                    title="삭제"
-                  ><X size={11} /></button>
+                  {/* 우측 상단 hover 액션 — 완료 토글/삭제. 시간 블록의 hover X 버튼과 동일 톤. */}
+                  <div className="absolute top-0.5 right-0.5 flex items-center gap-0.5 opacity-0 group-hover/todo:opacity-100 transition-opacity">
+                    <button
+                      onClick={e => { e.stopPropagation(); onToggle(t.id); }}
+                      className="size-4 rounded flex items-center justify-center hover:bg-black/10"
+                      title={t.completed ? "완료 해제" : "완료 처리"}
+                    >
+                      {t.completed
+                        ? <CheckCircle2 size={11} style={{ color: t.color }} />
+                        : <Circle size={11} style={{ color: t.color }} />}
+                    </button>
+                    <button
+                      onClick={e => { e.stopPropagation(); onDelete(t.id); }}
+                      className="size-4 rounded flex items-center justify-center hover:bg-black/10"
+                      title="삭제"
+                    ><X size={11} style={{ color: t.color }} /></button>
+                  </div>
                 </div>
               ))}
               {/* 일정 템플릿 드래그 hover 시 드랍 위치 프리뷰 — 시간 그리드의 hover ghost 와 톤 맞춤. */}
