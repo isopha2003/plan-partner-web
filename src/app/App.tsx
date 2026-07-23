@@ -2039,6 +2039,12 @@ function CalendarSection({
   const TOTAL_H = 24;
   const gridScrollRef = useRef<HTMLDivElement>(null);
 
+  // 글씨 크기 설정이 html에 CSS zoom을 걸어 앱 전체를 스케일하는데,
+  // 마우스 이벤트 좌표와 getBoundingClientRect는 시각적 viewport px로 반환되는 반면
+  // HOUR_H 같은 레이아웃 상수는 zoom이 안 걸린 CSS px 이라, delta를 zoom으로 나눠줘야
+  // hover ghost 위치가 실제 마우스 위치와 일치함.
+  const getRootZoom = () => parseFloat(document.documentElement.style.zoom) || 1;
+
   // 자식 블록(독립 타임블록형)은 부모의 상세 패널 안에서만 다뤄지고, 캘린더 그리드에는
   // 최상위 블록만 표시됨 — 안 그러면 부모 시간대 안에 자식이 겹쳐 보이거나 통계가 중복 집계됨.
   const topLevelBlocks = blocks.filter(b => !b.parentBlockId);
@@ -2517,7 +2523,8 @@ function CalendarSection({
                 onMouseMove={e => {
                   if (dragTplId || dragBlockId || resizing) return;
                   const rect = e.currentTarget.getBoundingClientRect();
-                  const rawMin = Math.max(0, Math.min(TOTAL_H * 60 - 15, Math.round(((e.clientY - rect.top) / HOUR_H) * 60 / 15) * 15));
+                  const zoom = getRootZoom();
+                  const rawMin = Math.max(0, Math.min(TOTAL_H * 60 - 15, Math.round(((e.clientY - rect.top) / zoom / HOUR_H) * 60 / 15) * 15));
                   setHoverSlot(prev => (prev?.dayIdx === di && prev.startMin === rawMin) ? prev : { dayIdx: di, startMin: rawMin });
                 }}
                 onMouseLeave={() => setHoverSlot(prev => (prev?.dayIdx === di ? null : prev))}
