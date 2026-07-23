@@ -51,6 +51,8 @@ export function rowToBlock(row: any) {
     repeat: jsonOrNull(row.repeat_rule) ?? undefined,
     parentBlockId: row.parent_block_id ?? undefined,
     nextBlockId: row.next_block_id ?? undefined,
+    // 오늘 달성률 계산에 이 블록을 포함할지 — 컬럼이 없는 legacy row 는 undefined → 기본 true.
+    countInCompletion: row.count_in_completion === undefined || row.count_in_completion === null ? true : !!row.count_in_completion,
   };
 }
 
@@ -128,8 +130,8 @@ export async function insertBlock(block: any) {
   await db.execute(
     `INSERT INTO blocks (
       id, template_id, parent_block_id, title, color, date, start_time, end_time,
-      completed, completed_at, memo, next_block_id, repeat_group_id, repeat_rule
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      completed, completed_at, memo, next_block_id, repeat_group_id, repeat_rule, count_in_completion
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       block.templateId ?? null,
@@ -145,6 +147,7 @@ export async function insertBlock(block: any) {
       block.nextBlockId ?? null,
       block.repeatGroupId ?? null,
       block.repeat ? JSON.stringify(block.repeat) : null,
+      block.countInCompletion === false ? 0 : 1,
     ]
   );
   const inserted = await selectBlockById(id);
@@ -187,6 +190,7 @@ export async function patchBlock(id: string, changes: any) {
   // 되어야 함(예전엔 여기서 처리를 안 해서 DB에는 template_id가 NULL로 남아 재시작 후
   // 태그 상속이 끊기던 문제가 있었음).
   if (changes.templateId !== undefined) push("template_id", changes.templateId ?? null);
+  if (changes.countInCompletion !== undefined) push("count_in_completion", changes.countInCompletion ? 1 : 0);
 
   if (sets.length === 0) return;
   vals.push(id);
@@ -233,8 +237,8 @@ export async function insertBlocksBulk(blocks: any[]) {
     await db.execute(
       `INSERT INTO blocks (
         id, template_id, parent_block_id, title, color, date, start_time, end_time,
-        completed, completed_at, memo, next_block_id, repeat_group_id, repeat_rule
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        completed, completed_at, memo, next_block_id, repeat_group_id, repeat_rule, count_in_completion
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         block.templateId ?? null,
@@ -250,6 +254,7 @@ export async function insertBlocksBulk(blocks: any[]) {
         block.nextBlockId ?? null,
         block.repeatGroupId ?? null,
         block.repeat ? JSON.stringify(block.repeat) : null,
+        block.countInCompletion === false ? 0 : 1,
       ]
     );
   }
@@ -298,6 +303,8 @@ export interface Todo {
   completed: boolean;
   memo: string;
   category: string;
+  // 오늘 달성률 계산에 이 할 일을 포함할지. 기본 true.
+  countInCompletion: boolean;
   sortOrder: number;
 }
 
@@ -315,24 +322,26 @@ export async function fetchTodos(): Promise<Todo[]> {
     completed: !!r.completed,
     memo: r.memo ?? "",
     category: r.category ?? "",
+    countInCompletion: r.count_in_completion === undefined || r.count_in_completion === null ? true : !!r.count_in_completion,
     sortOrder: r.sort_order ?? 0,
   }));
 }
 
-export async function createTodo(t: { title: string; date: string; endDate?: string | null; color?: string; memo?: string; category?: string }): Promise<Todo> {
+export async function createTodo(t: { title: string; date: string; endDate?: string | null; color?: string; memo?: string; category?: string; countInCompletion?: boolean }): Promise<Todo> {
   const db = await getDb();
   const id = uuid();
   const color = t.color ?? DEFAULT_TODO_COLOR;
   const memo = t.memo ?? "";
   const category = t.category ?? "";
+  const countInCompletion = t.countInCompletion === false ? false : true;
   await db.execute(
-    "INSERT INTO todos (id, title, date, end_date, color, completed, memo, category, sort_order) VALUES (?, ?, ?, ?, ?, 0, ?, ?, 0)",
-    [id, t.title, t.date, t.endDate ?? null, color, memo, category]
+    "INSERT INTO todos (id, title, date, end_date, color, completed, memo, category, count_in_completion, sort_order) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 0)",
+    [id, t.title, t.date, t.endDate ?? null, color, memo, category, countInCompletion ? 1 : 0]
   );
-  return { id, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, memo, category, sortOrder: 0 };
+  return { id, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, memo, category, countInCompletion, sortOrder: 0 };
 }
 
-export async function updateTodo(id: string, changes: { title?: string; date?: string; endDate?: string | null; color?: string; memo?: string; category?: string; sortOrder?: number }): Promise<void> {
+export async function updateTodo(id: string, changes: { title?: string; date?: string; endDate?: string | null; color?: string; memo?: string; category?: string; countInCompletion?: boolean; sortOrder?: number }): Promise<void> {
   const db = await getDb();
   const sets: string[] = [];
   const vals: any[] = [];
@@ -342,6 +351,7 @@ export async function updateTodo(id: string, changes: { title?: string; date?: s
   if (changes.color !== undefined) { sets.push("color = ?"); vals.push(changes.color); }
   if (changes.memo !== undefined) { sets.push("memo = ?"); vals.push(changes.memo); }
   if (changes.category !== undefined) { sets.push("category = ?"); vals.push(changes.category); }
+  if (changes.countInCompletion !== undefined) { sets.push("count_in_completion = ?"); vals.push(changes.countInCompletion ? 1 : 0); }
   if (changes.sortOrder !== undefined) { sets.push("sort_order = ?"); vals.push(changes.sortOrder); }
   if (sets.length === 0) return;
   vals.push(id);

@@ -26,7 +26,6 @@ import { runAutoBackupIfNeeded, createBackupNow, getLastBackupTimestamp } from "
 import { checkForUpdate, installUpdate, type UpdateCheckResult } from "../lib/updater";
 import { notifyError } from "../lib/notify";
 import { Toaster } from "./components/ui/sonner";
-import { toast } from "sonner";
 import { emit, listen } from "@tauri-apps/api/event";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useTimerWindow } from "./useTimerWindow";
@@ -49,6 +48,9 @@ interface Block {
   repeat?: BlockRepeat;
   repeatGroupId?: string;
   nextBlockId?: string;
+  // 오늘 달성률 계산에 포함할지. 기본 true — 특정 블록(자유시간, 이동 등)을 통계에서
+  // 빼고 싶을 때만 상세 패널 토글로 false 로 바꿈.
+  countInCompletion: boolean;
 }
 
 interface Deadline {
@@ -900,24 +902,11 @@ export default function App() {
       };
     });
 
-    // 겹침이 있어도 자동 이동 없이 원래 시간 그대로 삽입 — 사용자가 드래그로 옮기게 함.
-    // 예전엔 겹치면 통째로 silent skip 이라 "같은 슬롯 복제" 나 "차 있는 요일 붙여넣기" 가
-    // 아무 반응 없이 실패했음. 이제 그냥 그대로 넣고 겹치는 개수만 토스트로 알림.
-    const current = blocksRefTop.current;
-    let overlappedCount = 0;
-    for (const nb of candidates) {
-      const sMin = nb.startH * 60 + nb.startM;
-      const eMin = nb.endH * 60 + nb.endM;
-      const conflictsExisting = overlapsBlock(current, nb.date, sMin, eMin);
-      const conflictsSelf = candidates.some(a => a !== nb && a.date === nb.date &&
-        sMin < a.endH * 60 + a.endM && eMin > a.startH * 60 + a.startM);
-      if (conflictsExisting || conflictsSelf) overlappedCount++;
-    }
-
+    // 겹침이 있어도 자동 이동/차단/알림 없이 원래 시간 그대로 삽입 — 사용자가 원하는
+    // 대로 그냥 붙여넣기. 겹친 블록은 캘린더에서 시각적으로 겹쳐 보이며 드래그로 정리 가능.
     try {
       const real = await insertBlocksBulk(candidates);
       setBlocks(bs => [...bs, ...real]);
-      if (overlappedCount > 0) toast(`붙여넣기: ${overlappedCount}개 겹침`);
       const ids = real.map(b => b.id);
       pushUndo(
         async () => {
@@ -1140,7 +1129,7 @@ export default function App() {
     // 같은 날짜의 기존 todo 중 최대 sort_order + 1 을 부여해 새 항목이 맨 아래로 붙게 함.
     const nextSort = Math.max(-1, ...todos.filter(x => x.date === t.date).map(x => x.sortOrder)) + 1;
     const color = t.color ?? "#5AA9E6";
-    setTodos(ts => [...ts, { id: tempId, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, memo: "", category: "", sortOrder: nextSort }]);
+    setTodos(ts => [...ts, { id: tempId, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, memo: "", category: "", countInCompletion: true, sortOrder: nextSort }]);
     createTodo(t)
       .then(real => {
         setTodos(ts => ts.map(x => (x.id === tempId ? { ...real, sortOrder: nextSort } : x)));
@@ -1167,7 +1156,7 @@ export default function App() {
     if (snapshot) {
       pushUndo(async () => {
         try {
-          const restored = await createTodo({ title: snapshot.title, date: snapshot.date, endDate: snapshot.endDate, color: snapshot.color, memo: snapshot.memo, category: snapshot.category });
+          const restored = await createTodo({ title: snapshot.title, date: snapshot.date, endDate: snapshot.endDate, color: snapshot.color, memo: snapshot.memo, category: snapshot.category, countInCompletion: snapshot.countInCompletion });
           setTodos(ts => [...ts, restored]);
         } catch (e) { notifyError("todo 복구 실패")(e); }
       });
@@ -1192,6 +1181,11 @@ export default function App() {
     setTodos(ts => ts.map(t => t.id === id ? { ...t, category } : t));
     setSelectedTodo(prev => (prev && prev.id === id ? { ...prev, category } : prev));
     updateTodo(id, { category }).catch(notifyError("todo 카테고리 저장 실패"));
+  };
+  const updateTodoCountInCompletion = (id: string, countInCompletion: boolean) => {
+    setTodos(ts => ts.map(t => t.id === id ? { ...t, countInCompletion } : t));
+    setSelectedTodo(prev => (prev && prev.id === id ? { ...prev, countInCompletion } : prev));
+    updateTodo(id, { countInCompletion }).catch(notifyError("todo 달성률 설정 저장 실패"));
   };
 
   // 드래그로 todo 를 다른 컬럼(날짜)/위치로 옮기거나, 다른 todo 위에 놓아 두 todo 순서를 교체.
@@ -1231,8 +1225,14 @@ export default function App() {
   };
 
   const todayBlocks = blocks.filter(b => b.date === TODAY_STR && !b.parentBlockId);
-  const completedCount = todayBlocks.filter(b => b.completed).length;
-  const completionRate = todayBlocks.length > 0 ? Math.round((completedCount / todayBlocks.length) * 100) : 0;
+  const todayTodos = todos.filter(t => t.date === TODAY_STR || (t.endDate && TODAY_STR >= t.date && TODAY_STR <= t.endDate));
+  // 달성률 — 시간 블록 + 할 일 중 countInCompletion 이 true 인 항목만 분모/분자에 포함.
+  // 사용자가 "이 블록은 통계에서 빼고 싶다"고 표시한 항목은 계산 자체에서 제외.
+  const completionBlocks = todayBlocks.filter(b => b.countInCompletion !== false);
+  const completionTodos = todayTodos.filter(t => t.countInCompletion !== false);
+  const completionTotal = completionBlocks.length + completionTodos.length;
+  const completedCount = completionBlocks.filter(b => b.completed).length + completionTodos.filter(t => t.completed).length;
+  const completionRate = completionTotal > 0 ? Math.round((completedCount / completionTotal) * 100) : 0;
   const totalPlanMin = todayBlocks.reduce((s, b) => s + durMin(b), 0);
 
   const navItems: { id: Section; label: string; Icon: React.FC<{ size: number }> }[] = [
@@ -1451,6 +1451,10 @@ export default function App() {
               updateBlock(selectedBlock.id, { memo });
               setSelectedBlock({ ...selectedBlock, memo });
             }}
+            onCountInCompletionSave={(v) => {
+              updateBlock(selectedBlock.id, { countInCompletion: v });
+              setSelectedBlock({ ...selectedBlock, countInCompletion: v });
+            }}
             onColorSave={(color) => {
               // 블록 색만 저장. 사이드바 템플릿과의 자동 동기화는 없음 —
               // 캘린더에서 만든 블록은 이제 템플릿을 만들지 않고, 템플릿 픽커에서 뽑아온
@@ -1484,6 +1488,7 @@ export default function App() {
               date: selectedBlock.date,
               completed: false,
               memo: "",
+              countInCompletion: true,
               ...child,
             })}
             onGoToParent={() => {
@@ -1523,6 +1528,7 @@ export default function App() {
             onColorSave={(color) => updateTodoColor(selectedTodo.id, color)}
             onMemoSave={(memo) => updateTodoMemo(selectedTodo.id, memo)}
             onCategorySave={(category) => updateTodoCategory(selectedTodo.id, category)}
+            onCountInCompletionSave={(v) => updateTodoCountInCompletion(selectedTodo.id, v)}
           />
         )}
       </div>
@@ -2662,6 +2668,7 @@ function CalendarSection({
                       tags: [],
                       memo: "",
                       date: dateStr,
+                      countInCompletion: true,
                     };
                     setHoverSlot(null);
                     // 빈 영역 클릭은 선택 해제와 함께 새 블록 만들기
@@ -2770,7 +2777,7 @@ function CalendarSection({
                     onAddBlock({ id: `b-${Date.now()}`, templateId: tpl.id, title: tpl.title, color: tpl.color,
                       startH: dropTarget.startH, startM: dropTarget.startM,
                       endH: Math.floor(eMin / 60), endM: eMin % 60,
-                      completed: false, tags: tpl.tags, memo: "", date: dateStr });
+                      completed: false, tags: tpl.tags, memo: "", date: dateStr, countInCompletion: true });
                   }
                   setDropTarget(null); setDragTplId(null);
                 }}
@@ -3582,14 +3589,13 @@ function CalendarSection({
            바깥 클릭 리스너가 닫음(useEffect). mousedown 시 setCtxMenu(null) 이 발화하니
            메뉴 내부 클릭엔 stopPropagation 로 닫힘 방지. */}
       {ctxMenu && (
-        /* 폰트/아이콘/패딩 모두 캘린더 블록 셀(text-[9px]) 과 같은 톤으로 맞춰서
-           앱 다른 UI 와 위화감 없게. leading-none 으로 line-height 여유 공간도 제거. */
+        /* 최대한 컴팩트하게 — 텍스트/아이콘 모두 축소. */
         <div
           onMouseDown={e => e.stopPropagation()}
-          className="fixed z-50 min-w-[72px] bg-card border border-border rounded-md shadow-md p-0.5 text-[9px] leading-none"
+          className="fixed z-50 min-w-[56px] bg-card border border-border rounded-md shadow-md p-0.5 text-[8px] leading-none"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
         >
-          <div className="px-1 py-0.5 text-[8px] text-muted-foreground tracking-wide">
+          <div className="px-1 py-0.5 text-[7px] text-muted-foreground tracking-wide">
             {selectedIds.size}개
           </div>
           <button
@@ -3603,7 +3609,7 @@ function CalendarSection({
               setCtxMenu(null);
             }}
             className="w-full text-left px-1 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1"
-          ><Copy size={9} /> 복사</button>
+          ><Copy size={8} /> 복사</button>
           <button
             onClick={() => {
               onPasteBlocks(blockClipboard, toDateStr(viewDate));
@@ -3611,7 +3617,7 @@ function CalendarSection({
             }}
             disabled={blockClipboard.length === 0}
             className="w-full text-left px-1 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1 disabled:opacity-40 disabled:hover:bg-transparent"
-          ><Plus size={9} /> 붙임</button>
+          ><Plus size={8} /> 붙임</button>
           <div className="h-px bg-border my-0.5" />
           <button
             onClick={() => {
@@ -3621,7 +3627,7 @@ function CalendarSection({
               setCtxMenu(null);
             }}
             className="w-full text-left px-1 py-0.5 rounded hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-1"
-          ><Trash2 size={9} /> 삭제</button>
+          ><Trash2 size={8} /> 삭제</button>
         </div>
       )}
 
@@ -5592,7 +5598,7 @@ function SettingsSection({
 
 // ── Block Detail Panel — no timer (v2) ─────────────────────────────
 function BlockDetailPanel({
-  block, childBlocks, templates, sameDayBlocks, initialEditTitle, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave, onTitleSave, onColorSave,
+  block, childBlocks, templates, sameDayBlocks, initialEditTitle, onClose, onToggle, onDelete, onDeleteRepeatGroup, onSetRepeat, onMemoSave, onTitleSave, onColorSave, onCountInCompletionSave,
   paletteColors, onAddPaletteColor, onRemovePaletteColor,
   onSelectChild, onToggleChild, onDeleteChild, onAddTimeblockChild, onGoToParent, onSetNextBlock,
 }: {
@@ -5609,6 +5615,7 @@ function BlockDetailPanel({
   onMemoSave: (memo: string) => void;
   onTitleSave: (title: string) => void;
   onColorSave: (color: string) => void;
+  onCountInCompletionSave: (v: boolean) => void;
   paletteColors: string[];
   onAddPaletteColor: (color: string) => void;
   onRemovePaletteColor: (color: string) => void;
@@ -5909,6 +5916,17 @@ function BlockDetailPanel({
           />
         </div>
 
+        {/* 오늘 달성률 포함 여부 토글 — 자유시간/이동 등 통계에 넣고 싶지 않은 블록은 여기서 끔. */}
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={block.countInCompletion !== false}
+            onChange={e => onCountInCompletionSave(e.target.checked)}
+            className="size-3.5 rounded border-border accent-primary cursor-pointer"
+          />
+          <span className="text-[11px] text-foreground">오늘 달성률에 포함</span>
+        </label>
+
         {/* Habit stacking — 같은 날짜의 다른 최상위 블록을 "다음 블록"으로 연결.
             연결된 블록끼리는 캘린더 그리드 위에 선으로 표시됨(CalendarSection 참고) */}
         {!block.parentBlockId && (
@@ -6150,7 +6168,7 @@ function NewChecklistItemForm({
 // 반복/자식 블록/습관 스태킹/체크리스트 같은 기능은 없이 제목·색상·메모·완료·삭제만.
 function TodoDetailPanel({
   todo, paletteColors, onAddPaletteColor, onRemovePaletteColor,
-  onClose, onToggle, onDelete, onTitleSave, onColorSave, onMemoSave, onCategorySave,
+  onClose, onToggle, onDelete, onTitleSave, onColorSave, onMemoSave, onCategorySave, onCountInCompletionSave,
 }: {
   todo: Todo;
   paletteColors: string[];
@@ -6163,6 +6181,7 @@ function TodoDetailPanel({
   onColorSave: (color: string) => void;
   onMemoSave: (memo: string) => void;
   onCategorySave: (category: string) => void;
+  onCountInCompletionSave: (v: boolean) => void;
 }) {
   const [memo, setMemo] = useState(todo.memo);
   const [category, setCategory] = useState(todo.category);
@@ -6310,6 +6329,17 @@ function TodoDetailPanel({
             className="w-full h-24 px-3 py-2 text-xs bg-muted rounded-lg resize-none outline-none focus:ring-2 focus:ring-ring text-foreground placeholder:text-muted-foreground"
           />
         </div>
+
+        {/* 오늘 달성률 포함 여부 토글 — 시간 블록과 동일한 옵션. */}
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={todo.countInCompletion !== false}
+            onChange={e => onCountInCompletionSave(e.target.checked)}
+            className="size-3.5 rounded border-border accent-primary cursor-pointer"
+          />
+          <span className="text-[11px] text-foreground">오늘 달성률에 포함</span>
+        </label>
 
         {/* Delete */}
         <button

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS blocks (
   next_block_id TEXT REFERENCES blocks(id) ON DELETE SET NULL,
   repeat_group_id TEXT,
   repeat_rule TEXT,
+  count_in_completion INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -111,6 +112,7 @@ CREATE TABLE IF NOT EXISTS todos (
   completed_at TEXT,
   memo TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT '',
+  count_in_completion INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -146,13 +148,21 @@ const BLOCK_TEMPLATE_UPGRADES = [
   "ALTER TABLE block_templates ADD COLUMN kind TEXT NOT NULL DEFAULT 'time'",
 ];
 
+// blocks 사후 컬럼 추가.
+// count_in_completion: 오늘 달성률 계산에 이 블록을 포함할지 토글. 기본 1(포함).
+const BLOCK_UPGRADES = [
+  "ALTER TABLE blocks ADD COLUMN count_in_completion INTEGER NOT NULL DEFAULT 1",
+];
+
 // todos 에 color 컬럼 사후 추가 — 시간 블록과 같은 스트라이프 UI 를 위해 색상 필요.
 // memo 컬럼도 사후 추가 — 시간 블록처럼 상세 패널에서 자유 메모 저장.
 // category 컬럼 사후 추가 — 자유 텍스트 카테고리로 할 일 그룹핑/정렬.
+// count_in_completion: 시간 블록과 마찬가지로 달성률 포함 여부 토글. 기본 1(포함).
 const TODO_UPGRADES = [
   "ALTER TABLE todos ADD COLUMN color TEXT NOT NULL DEFAULT '#5AA9E6'",
   "ALTER TABLE todos ADD COLUMN memo TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE todos ADD COLUMN category TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE todos ADD COLUMN count_in_completion INTEGER NOT NULL DEFAULT 1",
 ];
 
 let dbPromise: Promise<Database> | null = null;
@@ -192,6 +202,9 @@ export function getDb(): Promise<Database> {
         try { await db.execute(stmt); } catch { /* column/table already exists or not yet created */ }
       }
       for (const stmt of BLOCK_TEMPLATE_UPGRADES) {
+        try { await db.execute(stmt); } catch { /* column/table already exists or not yet created */ }
+      }
+      for (const stmt of BLOCK_UPGRADES) {
         try { await db.execute(stmt); } catch { /* column/table already exists or not yet created */ }
       }
       for (const stmt of TODO_UPGRADES) {
