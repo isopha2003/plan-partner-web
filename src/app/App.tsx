@@ -12,7 +12,7 @@ import {
   fetchTemplates, createTemplate, deleteTemplateRow, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, deleteRepeatInstancesExceptOrigin, insertBlocksBulk,
   fetchDeadlines, createDeadline, toggleDeadlineRow, deleteDeadlineRow,
-  fetchTodos, createTodo, updateTodo, toggleTodoRow, deleteTodoRow, type Todo,
+  fetchTodos, createTodo, updateTodo, toggleTodoRow, deleteTodoRow, bulkUpdateTodoOrder, type Todo,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
   fetchTodaySessions, startTimerSession, endTimerSession, deleteTodaySessions, fetchFocusSecByDate,
   fetchChecklistItems, createChecklistItem, toggleChecklistItemRow, deleteChecklistItemRow,
@@ -1084,9 +1084,17 @@ export default function App() {
   const addTodo = (t: { title: string; date: string; endDate?: string | null }) => {
     if (!t.title.trim()) return;
     const tempId = `temp-${crypto.randomUUID()}`;
-    setTodos(ts => [...ts, { id: tempId, title: t.title, date: t.date, endDate: t.endDate ?? null, completed: false, sortOrder: 0 }]);
+    // 같은 날짜의 기존 todo 중 최대 sort_order + 1 을 부여해 새 항목이 맨 아래로 붙게 함.
+    const nextSort = Math.max(-1, ...todos.filter(x => x.date === t.date).map(x => x.sortOrder)) + 1;
+    setTodos(ts => [...ts, { id: tempId, title: t.title, date: t.date, endDate: t.endDate ?? null, completed: false, sortOrder: nextSort }]);
     createTodo(t)
-      .then(real => setTodos(ts => ts.map(x => (x.id === tempId ? real : x))))
+      .then(real => {
+        setTodos(ts => ts.map(x => (x.id === tempId ? { ...real, sortOrder: nextSort } : x)));
+        if (nextSort !== 0) {
+          // DB 는 아직 sort_order=0 이므로 즉시 patch. 실패해도 UI 는 유지 — 다음 로드에서 정정됨.
+          updateTodo(real.id, { sortOrder: nextSort }).catch(() => {});
+        }
+      })
       .catch(e => { setTodos(ts => ts.filter(x => x.id !== tempId)); notifyError("todo 추가 실패")(e); });
   };
   const toggleTodo = (id: string) => {
@@ -1112,6 +1120,42 @@ export default function App() {
   const updateTodoTitle = (id: string, title: string) => {
     setTodos(ts => ts.map(t => t.id === id ? { ...t, title } : t));
     updateTodo(id, { title }).catch(notifyError("todo 저장 실패"));
+  };
+
+  // 드래그로 todo 를 다른 컬럼(날짜)/위치로 옮기거나, 다른 todo 위에 놓아 두 todo 순서를 교체.
+  // 낙관적 업데이트 후 실패 시 롤백. sort_order 는 상대적 순서만 의미 있으므로 컬럼 내 재정렬 시
+  // 컬럼 안 todo 들 전체에 0..n-1 을 다시 부여해 서로 겹치지 않게 정규화한다.
+  const reorderTodos = (targetTodos: { id: string; date: string; sortOrder: number }[]) => {
+    const map = new Map(targetTodos.map(t => [t.id, t]));
+    const snapshot = todos;
+    setTodos(ts => ts.map(t => {
+      const upd = map.get(t.id);
+      return upd ? { ...t, date: upd.date, sortOrder: upd.sortOrder } : t;
+    }));
+    bulkUpdateTodoOrder(targetTodos).catch(e => {
+      setTodos(snapshot);
+      notifyError("todo 순서 저장 실패")(e);
+    });
+  };
+
+  // 지정 todo 를 새 날짜의 마지막에 붙임(단순 컬럼 이동).
+  const moveTodoToDate = (id: string, newDate: string) => {
+    const target = todos.find(t => t.id === id);
+    if (!target) return;
+    if (target.date === newDate) return;
+    const destMax = Math.max(-1, ...todos.filter(t => t.date === newDate).map(t => t.sortOrder));
+    reorderTodos([{ id, date: newDate, sortOrder: destMax + 1 }]);
+  };
+
+  // 두 todo 의 자리를 교체 — 같은 컬럼이면 sort_order 만, 다른 컬럼이면 date + sort_order 둘 다.
+  const swapTodos = (aId: string, bId: string) => {
+    const a = todos.find(t => t.id === aId);
+    const b = todos.find(t => t.id === bId);
+    if (!a || !b || a.id === b.id) return;
+    reorderTodos([
+      { id: a.id, date: b.date, sortOrder: b.sortOrder },
+      { id: b.id, date: a.date, sortOrder: a.sortOrder },
+    ]);
   };
 
   const todayBlocks = blocks.filter(b => b.date === TODAY_STR && !b.parentBlockId);
@@ -1240,6 +1284,8 @@ export default function App() {
               onToggleTodo={toggleTodo}
               onDeleteTodo={deleteTodo}
               onAddTodo={addTodo}
+              onReorderTodos={reorderTodos}
+              onSwapTodo={swapTodos}
               onSelect={setSelectedBlock}
               onGoToCalendar={() => setSection("calendar")}
             />
@@ -1283,6 +1329,9 @@ export default function App() {
               onToggleTodo={toggleTodo}
               onDeleteTodo={deleteTodo}
               onUpdateTodoTitle={updateTodoTitle}
+              onMoveTodo={moveTodoToDate}
+              onSwapTodo={swapTodos}
+              onReorderTodos={reorderTodos}
             />
           )}
           {section === "deadlines" && (
@@ -1727,7 +1776,7 @@ function CircleProgress({ value, size, strokeWidth = 5 }: { value: number; size:
 
 // ── Today Section ──────────────────────────────────────────────────
 function TodaySection({
-  blocks, deadlines, todos, completionRate, onToggle, onToggleDeadline, onToggleTodo, onDeleteTodo, onAddTodo, onSelect, onGoToCalendar,
+  blocks, deadlines, todos, completionRate, onToggle, onToggleDeadline, onToggleTodo, onDeleteTodo, onAddTodo, onReorderTodos, onSwapTodo, onSelect, onGoToCalendar,
 }: {
   blocks: Block[];
   deadlines: Deadline[];
@@ -1738,6 +1787,8 @@ function TodaySection({
   onToggleTodo: (id: string) => void;
   onDeleteTodo: (id: string) => void;
   onAddTodo: (t: { title: string; date: string; endDate?: string | null }) => void;
+  onReorderTodos?: (targets: { id: string; date: string; sortOrder: number }[]) => void;
+  onSwapTodo?: (aId: string, bId: string) => void;
   onSelect: (b: Block) => void;
   onGoToCalendar: () => void;
 }) {
@@ -1746,6 +1797,11 @@ function TodaySection({
   const overdueDeadlines = deadlines.filter(d => d.dueDate < TODAY_STR);
   const todayDeadlines = deadlines.filter(d => d.dueDate === TODAY_STR);
   const [todoDraft, setTodoDraft] = useState("");
+  const [dragTodoId, setDragTodoId] = useState<string | null>(null);
+  const [swapTargetId, setSwapTargetId] = useState<string | null>(null);
+  // sort_order 기준 정렬 — 시간표 뷰의 순서와 일관되게 유지. 같은 sort_order 는 created_at 순.
+  const sortedTodos = [...todos].sort((a, b) => a.sortOrder - b.sortOrder);
+  const TODO_COLOR = "#5AA9E6";
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -1798,18 +1854,52 @@ function TodaySection({
           </div>
         )}
 
-        {/* Todos — 마감과 시간 블록 사이. 체크박스로 완료 토글, 우측 X 로 삭제 */}
+        {/* Todos — 마감과 시간 블록 사이. 시간표 블록과 동일한 스트라이프+체크박스 디자인.
+              드래그로 서로 자리를 교체할 수 있고, 시간대는 지정하지 않음. */}
         <div className="mb-4">
           <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">오늘 일정</div>
           <div className="space-y-1.5">
-            {todos.map(t => (
-              <div key={t.id} className={`group/todo flex items-center gap-2.5 px-3 py-2 rounded-lg border bg-card hover:border-primary/40 transition-colors ${t.completed ? "opacity-60" : ""}`}>
+            {sortedTodos.map(t => (
+              <div key={t.id}
+                draggable={!!onSwapTodo}
+                onDragStart={e => {
+                  if (!onSwapTodo) return;
+                  e.dataTransfer.setData("todoId", t.id);
+                  e.dataTransfer.effectAllowed = "move";
+                  setDragTodoId(t.id);
+                }}
+                onDragEnd={() => { setDragTodoId(null); setSwapTargetId(null); }}
+                onDragOver={e => {
+                  if (!onSwapTodo || !dragTodoId || dragTodoId === t.id) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setSwapTargetId(t.id);
+                }}
+                onDragLeave={() => { setSwapTargetId(prev => prev === t.id ? null : prev); }}
+                onDrop={e => {
+                  if (!onSwapTodo) return;
+                  const otherId = e.dataTransfer.getData("todoId");
+                  if (!otherId || otherId === t.id) return;
+                  e.preventDefault();
+                  onSwapTodo(otherId, t.id);
+                  setDragTodoId(null); setSwapTargetId(null);
+                }}
+                className={`group/todo flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
+                  onSwapTodo ? "cursor-grab active:cursor-grabbing" : ""
+                } ${
+                  t.completed ? "bg-muted/40 border-transparent opacity-60"
+                    : swapTargetId === t.id ? "bg-primary/10 border-primary ring-1 ring-primary/40"
+                    : dragTodoId === t.id ? "bg-card border-primary/40 opacity-50"
+                    : "bg-card border-border hover:border-primary/40"
+                }`}
+              >
                 <button onClick={() => onToggleTodo(t.id)} className="flex-shrink-0">
                   {t.completed
-                    ? <CheckCircle2 size={16} className="text-primary" />
+                    ? <CheckCircle2 size={16} style={{ color: TODO_COLOR }} />
                     : <Circle size={16} className="text-muted-foreground" />}
                 </button>
-                <span className={`text-sm flex-1 min-w-0 truncate ${t.completed ? "line-through" : ""}`}>{t.title}</span>
+                <span className="w-0.5 h-6 rounded-full flex-shrink-0" style={{ backgroundColor: TODO_COLOR }} />
+                <span className={`text-sm flex-1 min-w-0 truncate ${t.completed ? "line-through text-muted-foreground" : ""}`}>{t.title}</span>
                 <button onClick={() => onDeleteTodo(t.id)}
                   className="opacity-0 group-hover/todo:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
                 ><X size={13} /></button>
@@ -1905,7 +1995,7 @@ function CalendarSection({
   scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate, onAddTemplate, onDeleteBlockTemplate,
   paletteColors, onAddPaletteColor, onRemovePaletteColor,
   blockClipboard, setBlockClipboard, onBulkMove, onPasteBlocks, onBulkDelete, onBulkSetRepeat, pushUndo,
-  todos, onAddTodo, onToggleTodo, onDeleteTodo, onUpdateTodoTitle,
+  todos, onAddTodo, onToggleTodo, onDeleteTodo, onUpdateTodoTitle, onMoveTodo, onSwapTodo, onReorderTodos,
 }: {
   blocks: Block[];
   deadlines: Deadline[];
@@ -1944,6 +2034,9 @@ function CalendarSection({
   onToggleTodo: (id: string) => void;
   onDeleteTodo: (id: string) => void;
   onUpdateTodoTitle: (id: string, title: string) => void;
+  onMoveTodo: (id: string, newDate: string) => void;
+  onSwapTodo: (aId: string, bId: string) => void;
+  onReorderTodos: (targets: { id: string; date: string; sortOrder: number }[]) => void;
 }) {
   const HOUR_H = 64;
   const TOTAL_H = 24;
@@ -2241,8 +2334,10 @@ function CalendarSection({
   const renderTimeGrid = (days: Date[]) => (
     <div className="flex-1 flex flex-col overflow-hidden min-w-0">
       {/* Day headers — 좌측 게이지 자리(w-12) 안에 이전 화살표, 우측 끝에 겹쳐 다음 화살표.
-           우측은 absolute 로 얹어 아래 시간 그리드 컬럼 폭과 어긋나지 않게 함. */}
-      <div className="relative flex border-b border-border flex-shrink-0 bg-card items-stretch">
+           우측은 absolute 로 얹어 아래 시간 그리드 컬럼 폭과 어긋나지 않게 함.
+           scrollbar-gutter: stable + overflow-hidden 조합으로 아래 스크롤 영역이 차지하는
+           스크롤바 폭만큼 우측 여백을 항상 예약해 컬럼 세로선이 정확히 정렬되도록. */}
+      <div className="relative flex border-b border-border flex-shrink-0 bg-card items-stretch overflow-hidden [scrollbar-gutter:stable]">
         <button
           onClick={goPrev}
           className="w-12 flex-shrink-0 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
@@ -2275,8 +2370,9 @@ function CalendarSection({
       </div>
 
       {/* Scrollable grid — 예전엔 여기 상단에 마감 sticky 슬롯이 있었지만, 마감을 일정(TodoPanel) 안에서
-           붉은 블록으로 표시하도록 통일하면서 그리드 상단에서는 제거함. */}
-      <div ref={gridScrollRef} className="flex-1 overflow-auto">
+           붉은 블록으로 표시하도록 통일하면서 그리드 상단에서는 제거함.
+           scrollbar-gutter: stable 로 스크롤 유무와 상관없이 스크롤바 폭을 예약해 위/아래 영역과 컬럼을 정렬. */}
+      <div ref={gridScrollRef} className="flex-1 overflow-auto [scrollbar-gutter:stable]">
         <div ref={timeGridRef} className="flex relative" style={{ height: TOTAL_H * HOUR_H }}>
           {/* 마퀴 오버레이 — 그리드 전체 좌표계에서 렌더되어 여러 요일 컬럼을 가로지를 수 있고,
                세로로도 24시간 그리드 어디에서든 클립 없이 이어짐. z-40 로 스틱키 헤더 위에 뜸. */}
@@ -3225,6 +3321,9 @@ function CalendarSection({
                   showDayHeader={contentView === "todos"}
                   onGoPrev={goPrev}
                   onGoNext={goNext}
+                  onMoveTodo={(id, changes) => { if (changes.date) onMoveTodo(id, changes.date); }}
+                  onSwapTodo={onSwapTodo}
+                  onReorderTodos={onReorderTodos}
                 />
               </div>
             )}
@@ -3301,7 +3400,7 @@ function CalendarSection({
 // 각 컬럼 하단 입력창. 실시간 편집은 title 클릭 → inline input.
 function TodoPanel({
   todos, viewDays, onAdd, onToggle, onDelete, onUpdateTitle, deadlines, onToggleDeadline,
-  showDayHeader, onGoPrev, onGoNext,
+  showDayHeader, onGoPrev, onGoNext, onMoveTodo, onSwapTodo, onReorderTodos,
 }: {
   todos: Todo[];
   viewDays: Date[];
@@ -3314,7 +3413,14 @@ function TodoPanel({
   showDayHeader?: boolean;
   onGoPrev?: () => void;
   onGoNext?: () => void;
+  // 드래그로 todo 를 다른 컬럼(날짜)으로 옮기기 위한 콜백. undefined 면 드래그 비활성.
+  onMoveTodo?: (id: string, changes: { date?: string }) => void;
+  // 두 todo 가 서로 자리를 교체할 때 호출. 위에 겹쳐 드랍하면 발화.
+  onSwapTodo?: (aId: string, bId: string) => void;
+  onReorderTodos?: (targets: { id: string; date: string; sortOrder: number }[]) => void;
 }) {
+  const [dragTodoId, setDragTodoId] = useState<string | null>(null);
+  const [swapTargetId, setSwapTargetId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState("");
@@ -3331,8 +3437,9 @@ function TodoPanel({
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {showDayHeader && (
-        /* 시간표 뷰의 요일/날짜 헤더와 폭·톤을 맞춤. 좌/우 끝 chevron 도 동일. */
-        <div className="relative flex border-b border-border flex-shrink-0 bg-card items-stretch">
+        /* 시간표 뷰의 요일/날짜 헤더와 폭·톤을 맞춤. 좌/우 끝 chevron 도 동일.
+           scrollbar-gutter stable 로 아래 스크롤 영역의 스크롤바 폭을 예약해 컬럼과 정렬. */
+        <div className="relative flex border-b border-border flex-shrink-0 bg-card items-stretch overflow-hidden [scrollbar-gutter:stable]">
           {onGoPrev && (
             <button
               onClick={onGoPrev}
@@ -3364,19 +3471,27 @@ function TodoPanel({
           )}
         </div>
       )}
-      <div className="flex-1 flex overflow-hidden">
+      {/* 컬럼들을 공유 스크롤에 담고 scrollbar-gutter stable 로 시간그리드 컬럼과 폭을 맞춤.
+           per-column overflow 는 없앰 — 모든 컬럼이 함께 스크롤. */}
+      <div className="flex-1 flex overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
         <div className="w-12 flex-shrink-0 flex items-start justify-end pt-2 pr-2 text-[9px] text-muted-foreground select-none">일정</div>
         {viewDays.map((day) => {
           const dateStr = toDateStr(day);
           const dayDeadlines = deadlines.filter(d => d.dueDate === dateStr);
-          const dayTodos = todos.filter(t => t.date === dateStr || (t.endDate && dateStr >= t.date && dateStr <= t.endDate));
+          const dayTodos = todos
+            .filter(t => t.date === dateStr || (t.endDate && dateStr >= t.date && dateStr <= t.endDate))
+            .sort((a, b) => a.sortOrder - b.sortOrder);
           return (
             <div key={dateStr}
               onDragOver={e => {
-                // 일정 템플릿(todoTemplateId) 을 이 컬럼에 놓을 수 있게 허용.
-                if (e.dataTransfer.types.includes("todoTemplateId") || e.dataTransfer.types.includes("todoTitle")) {
+                // 일정 템플릿(todoTemplateId) 이나 기존 todo(todoId) 를 이 컬럼에 놓을 수 있게 허용.
+                if (
+                  e.dataTransfer.types.includes("todoTemplateId") ||
+                  e.dataTransfer.types.includes("todoTitle") ||
+                  e.dataTransfer.types.includes("todoId")
+                ) {
                   e.preventDefault();
-                  e.dataTransfer.dropEffect = "copy";
+                  e.dataTransfer.dropEffect = e.dataTransfer.types.includes("todoId") ? "move" : "copy";
                 }
               }}
               onDrop={e => {
@@ -3384,9 +3499,17 @@ function TodoPanel({
                 if (title) {
                   e.preventDefault();
                   onAdd({ title, date: dateStr });
+                  return;
+                }
+                // 기존 todo 를 이 컬럼(빈 영역) 에 드랍하면 date 만 이 컬럼으로 옮김.
+                // 특정 todo 위에 드랍하면 자식 rows 의 onDrop 이 먼저 처리하며 stopPropagation.
+                const todoId = e.dataTransfer.getData("todoId");
+                if (todoId && onMoveTodo) {
+                  e.preventDefault();
+                  onMoveTodo(todoId, { date: dateStr });
                 }
               }}
-              className="flex-1 border-l border-border overflow-y-auto min-w-0 p-2 space-y-1.5">
+              className="flex-1 border-l border-border min-w-0 p-2 space-y-1.5">
               {/* 마감 — 시간표 블록과 동일한 스트라이프 + 이름 배치. 빨강 계열. */}
               {dayDeadlines.map(d => (
                 <div key={`dl-${d.id}`}
@@ -3405,10 +3528,46 @@ function TodoPanel({
                   <span className={`flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : "text-red-700"}`}>{d.title}</span>
                 </div>
               ))}
-              {/* 할 일 — 시간표 블록과 동일한 형태(왼쪽 색 스트라이프 + 제목 + 우측 삭제). */}
+              {/* 할 일 — 시간표 블록과 동일한 형태(왼쪽 색 스트라이프 + 제목 + 우측 삭제).
+                    드래그로 다른 컬럼(날짜) 으로 옮기거나 다른 todo 위에 드랍하면 자리를 교체. */}
               {dayTodos.map(t => (
                 <div key={t.id}
-                  className={`group/todo flex items-center gap-2 px-2 py-1.5 rounded-md border text-[11px] transition-colors ${t.completed ? "bg-muted/40 border-transparent opacity-60" : "bg-card border-border hover:border-primary/40"}`}
+                  draggable={!!onMoveTodo}
+                  onDragStart={e => {
+                    if (!onMoveTodo) return;
+                    e.dataTransfer.setData("todoId", t.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    setDragTodoId(t.id);
+                  }}
+                  onDragEnd={() => { setDragTodoId(null); setSwapTargetId(null); }}
+                  onDragOver={e => {
+                    if (!onSwapTodo) return;
+                    const draggedId = dragTodoId;
+                    if (!draggedId || draggedId === t.id) return;
+                    // 다른 todo 위 hover — 이 todo 위로 스왑 준비. 컬럼의 drop 이 뜨지 않도록 stop.
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.dataTransfer.dropEffect = "move";
+                    setSwapTargetId(t.id);
+                  }}
+                  onDragLeave={() => { setSwapTargetId(prev => prev === t.id ? null : prev); }}
+                  onDrop={e => {
+                    if (!onSwapTodo) return;
+                    const otherId = e.dataTransfer.getData("todoId");
+                    if (!otherId || otherId === t.id) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSwapTodo(otherId, t.id);
+                    setDragTodoId(null); setSwapTargetId(null);
+                  }}
+                  className={`group/todo flex items-center gap-2 px-2 py-1.5 rounded-md border text-[11px] transition-colors ${
+                    onMoveTodo ? "cursor-grab active:cursor-grabbing" : ""
+                  } ${
+                    t.completed ? "bg-muted/40 border-transparent opacity-60"
+                      : swapTargetId === t.id ? "bg-primary/10 border-primary ring-1 ring-primary/40"
+                      : dragTodoId === t.id ? "bg-card border-primary/40 opacity-50"
+                      : "bg-card border-border hover:border-primary/40"
+                  }`}
                 >
                   <button
                     onClick={() => onToggle(t.id)}

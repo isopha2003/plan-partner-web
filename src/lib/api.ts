@@ -321,16 +321,30 @@ export async function createTodo(t: { title: string; date: string; endDate?: str
   return { id, title: t.title, date: t.date, endDate: t.endDate ?? null, completed: false, sortOrder: 0 };
 }
 
-export async function updateTodo(id: string, changes: { title?: string; date?: string; endDate?: string | null }): Promise<void> {
+export async function updateTodo(id: string, changes: { title?: string; date?: string; endDate?: string | null; sortOrder?: number }): Promise<void> {
   const db = await getDb();
   const sets: string[] = [];
   const vals: any[] = [];
   if (changes.title !== undefined) { sets.push("title = ?"); vals.push(changes.title); }
   if (changes.date !== undefined) { sets.push("date = ?"); vals.push(changes.date); }
   if (changes.endDate !== undefined) { sets.push("end_date = ?"); vals.push(changes.endDate ?? null); }
+  if (changes.sortOrder !== undefined) { sets.push("sort_order = ?"); vals.push(changes.sortOrder); }
   if (sets.length === 0) return;
   vals.push(id);
   await db.execute(`UPDATE todos SET ${sets.join(", ")} WHERE id = ?`, vals);
+}
+
+// 다수 todo 의 date + sort_order 을 한 트랜잭션으로 갱신. 드래그로 순서 바꾸거나
+// 컬럼(날짜) 을 옮길 때 재정렬 결과를 한 번에 반영해 부분 반영을 피함.
+export async function bulkUpdateTodoOrder(items: { id: string; date: string; sortOrder: number }[]): Promise<void> {
+  if (items.length === 0) return;
+  const db = await getDb();
+  for (const it of items) {
+    await db.execute(
+      "UPDATE todos SET date = ?, sort_order = ? WHERE id = ?",
+      [it.date, it.sortOrder, it.id]
+    );
+  }
 }
 
 export async function toggleTodoRow(id: string, completed: boolean): Promise<void> {
