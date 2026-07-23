@@ -2299,6 +2299,15 @@ function CalendarSection({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // 마우스 마지막 위치 — Ctrl+V 시 커서가 놓인 요일 컬럼을 붙여넣기 대상으로 쓰기 위해 추적.
+  // useState 는 매 mousemove 마다 리렌더 폭탄이라 안 되고, ref 로만 축적.
+  const lastMouseRef = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => { lastMouseRef.current = { x: e.clientX, y: e.clientY }; };
+    document.addEventListener("mousemove", onMove);
+    return () => document.removeEventListener("mousemove", onMove);
+  }, []);
+
   // Ctrl+C / Ctrl+V — 캘린더 뷰가 활성일 때만 유효. 입력 필드에서 타이핑 중이면 브라우저 기본
   // 복사/붙여넣기를 방해하지 않도록 스킵.
   useEffect(() => {
@@ -2306,6 +2315,15 @@ function CalendarSection({
       const t = document.activeElement as HTMLElement | null;
       const tag = t?.tagName;
       return tag === "INPUT" || tag === "TEXTAREA" || (t as any)?.isContentEditable;
+    };
+    // 현재 마우스가 놓인 요일 컬럼의 date 를 반환. 데이 그리드/할 일 컬럼 모두 [data-date]
+    // 를 붙여두었으므로 closest 로 찾음. 컬럼 밖이면 null.
+    const dateUnderCursor = (): string | null => {
+      const m = lastMouseRef.current;
+      if (!m) return null;
+      const el = document.elementFromPoint(m.x, m.y) as HTMLElement | null;
+      const col = el?.closest?.("[data-date]") as HTMLElement | null;
+      return col?.dataset.date ?? null;
     };
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -2319,9 +2337,10 @@ function CalendarSection({
       } else if (key === "v" && !e.shiftKey) {
         if (blockClipboard.length === 0) return;
         e.preventDefault();
-        // 붙여넣기 대상 날짜: 일 뷰면 viewDate, 주 뷰면 viewDate 가 속한 주의 일요일(getWeekDays 참고).
-        // 사용자가 명시적으로 어느 셀에 놓고 싶으면 붙여넣기 후 드래그로 옮기면 됨.
-        onPasteBlocks(blockClipboard, toDateStr(viewDateRef.current));
+        // 마우스가 올라가 있는 요일 컬럼이 있으면 그 날짜로. 없으면 viewDate 로 폴백
+        // (일 뷰의 그 날짜, 주 뷰의 그 주 시작일).
+        const targetDate = dateUnderCursor() ?? toDateStr(viewDateRef.current);
+        onPasteBlocks(blockClipboard, targetDate);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -3532,32 +3551,32 @@ function CalendarSection({
       {ctxMenu && (
         <div
           onMouseDown={e => e.stopPropagation()}
-          className="fixed z-50 min-w-[140px] bg-card border border-border rounded-md shadow-md p-0.5 text-[11px]"
+          className="fixed z-50 min-w-[96px] bg-card border border-border rounded-md shadow-md p-0.5 text-[10px]"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
         >
-          <div className="px-2 py-0.5 text-[9px] text-muted-foreground uppercase tracking-wide">
-            {selectedIds.size}개 블록
+          <div className="px-1.5 py-0.5 text-[8px] text-muted-foreground uppercase tracking-wide">
+            {selectedIds.size}개
           </div>
           <button
             onClick={() => { setShowMultiRepeat(true); setCtxMenu(null); }}
-            className="w-full text-left px-2 py-1 rounded hover:bg-muted transition-colors flex items-center gap-1.5"
-          >↻ 반복 설정</button>
+            className="w-full text-left px-1.5 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1"
+          >↻ 반복</button>
           <button
             onClick={() => {
               const picked = topLevelBlocks.filter(b => selectedIds.has(b.id));
               if (picked.length > 0) setBlockClipboard(picked);
               setCtxMenu(null);
             }}
-            className="w-full text-left px-2 py-1 rounded hover:bg-muted transition-colors flex items-center gap-1.5"
-          ><Copy size={11} /> 복사</button>
+            className="w-full text-left px-1.5 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1"
+          ><Copy size={10} /> 복사</button>
           <button
             onClick={() => {
               onPasteBlocks(blockClipboard, toDateStr(viewDate));
               setCtxMenu(null);
             }}
             disabled={blockClipboard.length === 0}
-            className="w-full text-left px-2 py-1 rounded hover:bg-muted transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:hover:bg-transparent"
-          ><Plus size={11} /> 붙여넣기</button>
+            className="w-full text-left px-1.5 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1 disabled:opacity-40 disabled:hover:bg-transparent"
+          ><Plus size={10} /> 붙임</button>
           <div className="h-px bg-border my-0.5" />
           <button
             onClick={() => {
@@ -3566,8 +3585,8 @@ function CalendarSection({
               setSelectedIds(new Set());
               setCtxMenu(null);
             }}
-            className="w-full text-left px-2 py-1 rounded hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-1.5"
-          ><Trash2 size={11} /> 삭제</button>
+            className="w-full text-left px-1.5 py-0.5 rounded hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-1"
+          ><Trash2 size={10} /> 삭제</button>
         </div>
       )}
 
