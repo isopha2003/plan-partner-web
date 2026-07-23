@@ -209,6 +209,36 @@ export default function App() {
   // 이 블록의 제목이 처음 저장될 때 매칭 템플릿을 좌측 사이드바에 자동 추가하는 트리거로 씀.
   const [justCreatedBlockId, setJustCreatedBlockId] = useState<string | null>(null);
 
+  // 다중 블록 UX용 — 클립보드(Ctrl+C/V) 와 실행 취소 스택(Ctrl+Z).
+  // 클립보드는 블록의 얕은 스냅샷: 원본과 무관한 새 블록으로 붙여넣기 위해 date/id 만 재계산.
+  // 실행 취소는 함수 스택(inverse op)이라 각 뮤테이션이 "복구 방법"을 만들어 push.
+  const [blockClipboard, setBlockClipboard] = useState<Block[]>([]);
+  const undoStackRef = useRef<Array<() => Promise<void> | void>>([]);
+  const pushUndo = (fn: () => Promise<void> | void) => {
+    undoStackRef.current.push(fn);
+    // 스택 무한 성장 방지 — 사용자가 세션 내 실수 되돌리기가 목적이라 30개면 충분.
+    if (undoStackRef.current.length > 30) undoStackRef.current.shift();
+  };
+  const runUndo = async () => {
+    const fn = undoStackRef.current.pop();
+    if (!fn) return;
+    try { await fn(); } catch (e) { notifyError("실행 취소 실패")(e); }
+  };
+  // 전역 Ctrl+Z — 입력 필드에서 타이핑 중이면 브라우저 기본 undo를 방해하지 않도록 스킵.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      if (e.key.toLowerCase() !== "z") return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (t as any)?.isContentEditable) return;
+      e.preventDefault();
+      runUndo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -664,6 +694,8 @@ export default function App() {
     // FK 활성화 후에는 parent_block_id ON DELETE CASCADE 로 자식 블록이 DB에서도 함께 지워짐.
     // 로컬 상태만 부모를 제거하면 자식은 유령으로 남아 다음 refetch 전까지 이상하게 보일 수 있어
     // 로컬 상태에서도 함께 정리. 자식의 자식까지 재귀로 훑음.
+    // 삭제 직전 상태를 캡처해 Ctrl+Z 로 복구 가능하게 함. FK 있는 필드는 배제하고 재삽입.
+    const snapshot = blocksRefTop.current.find(b => b.id === id);
     setBlocks(bs => {
       const toDelete = new Set<string>([id]);
       let grew = true;
@@ -680,6 +712,149 @@ export default function App() {
     });
     setSelectedBlock(prev => prev?.id === id ? null : prev);
     deleteBlockRow(id).catch(notifyError("블록 삭제 실패"));
+    if (snapshot) {
+      pushUndo(async () => {
+        try {
+          const restored = await insertBlock({ ...snapshot, parentBlockId: undefined, nextBlockId: undefined, templateId: undefined });
+          setBlocks(bs => [...bs, restored]);
+        } catch (e) { notifyError("복구 실패")(e); }
+      });
+    }
+  };
+
+  // 최신 blocks 스냅샷을 콜백 클로저 안에서 안정적으로 읽기 위한 ref. 벌크 op(붙여넣기,
+  // 다중 이동, 다중 반복 등)은 사용자 액션 시점의 최신 상태를 봐야 겹침 체크나 undo 캡처가
+  // 정확해짐. 매 render 시 갱신되므로 stale closure 문제 없음.
+  const blocksRefTop = useRef<Block[]>([]);
+  useEffect(() => { blocksRefTop.current = blocks; }, [blocks]);
+
+  const overlapsBlock = (bs: Block[], date: string, sMin: number, eMin: number, excludeIds?: Set<string>) =>
+    bs.some(x =>
+      !x.parentBlockId && x.date === date && !(excludeIds?.has(x.id)) &&
+      sMin < x.endH * 60 + x.endM && eMin > x.startH * 60 + x.startM
+    );
+
+  // 다중 이동 — 캘린더에서 여러 블록 선택 후 드래그 시 사용. 각 블록의 (date, startMin) 을
+  // 전달하고, 겹침이 있는 블록은 스킵. 실행 취소 스택엔 이 이동을 통째로 롤백하는 함수 하나 push.
+  const bulkMoveBlocks = async (moves: Array<{ id: string; newDate: string; newStartMin: number }>) => {
+    const current = blocksRefTop.current;
+    const movingIds = new Set(moves.map(m => m.id));
+    const prevMap = new Map(current.filter(b => movingIds.has(b.id)).map(b => [b.id, b] as const));
+
+    // 이동 후 상태를 미리 계산해서 자체 겹침(선택된 블록끼리)도 검사
+    const projected: Array<{ id: string; date: string; sMin: number; eMin: number }> = [];
+    const applied: Array<{ id: string; changes: Partial<Block>; prev: Partial<Block> }> = [];
+    for (const m of moves) {
+      const prev = prevMap.get(m.id);
+      if (!prev) continue;
+      const dur = (prev.endH * 60 + prev.endM) - (prev.startH * 60 + prev.startM);
+      const sMin = Math.max(0, Math.min(24 * 60 - dur, m.newStartMin));
+      const eMin = sMin + dur;
+      // 이 무브 뿐 아니라 이미 planned 된 다른 무브들과도 안 겹치는지 함께 검사
+      const overlapWithOthers = projected.some(p => p.date === m.newDate && sMin < p.eMin && eMin > p.sMin);
+      if (overlapWithOthers) continue;
+      // 이동 대상이 아닌 기존 블록과의 겹침 검사
+      if (overlapsBlock(current, m.newDate, sMin, eMin, movingIds)) continue;
+      projected.push({ id: m.id, date: m.newDate, sMin, eMin });
+      applied.push({
+        id: m.id,
+        changes: { date: m.newDate, startH: Math.floor(sMin / 60), startM: sMin % 60, endH: Math.floor(eMin / 60), endM: eMin % 60 },
+        prev: { date: prev.date, startH: prev.startH, startM: prev.startM, endH: prev.endH, endM: prev.endM },
+      });
+    }
+    if (applied.length === 0) return;
+    // 로컬 상태 낙관적 적용
+    setBlocks(bs => bs.map(b => {
+      const a = applied.find(x => x.id === b.id);
+      return a ? { ...b, ...a.changes } : b;
+    }));
+    // DB 반영 — 각각 개별 patch (BEGIN/COMMIT은 pool 문제로 제거된 상태)
+    for (const a of applied) {
+      patchBlock(a.id, a.changes).catch(notifyError("블록 저장 실패"));
+    }
+    // 실행 취소: 원래 위치로 되돌림
+    pushUndo(async () => {
+      setBlocks(bs => bs.map(b => {
+        const a = applied.find(x => x.id === b.id);
+        return a ? { ...b, ...a.prev } : b;
+      }));
+      for (const a of applied) {
+        try { await patchBlock(a.id, a.prev); } catch (e) { notifyError("블록 저장 실패")(e); }
+      }
+    });
+  };
+
+  // Ctrl+V 붙여넣기 — 클립보드에 담긴 블록들을 targetDate 기준으로 상대 날짜 유지하며 복제.
+  // 겹치는 시간대는 스킵. 실행 취소는 붙여넣은 블록 전체를 삭제하는 함수 하나 push.
+  const pasteBlocks = async (source: Block[], targetDate: string) => {
+    if (source.length === 0) return;
+    const dates = source.map(b => b.date).sort();
+    const earliest = parseLocalDate(dates[0]);
+    const target = parseLocalDate(targetDate);
+    const offsetDays = Math.round((target.getTime() - earliest.getTime()) / 86400000);
+
+    const candidates: Block[] = source.map(b => {
+      const d = parseLocalDate(b.date);
+      d.setDate(d.getDate() + offsetDays);
+      return {
+        ...b,
+        id: `paste-${crypto.randomUUID()}`,
+        date: toDateStr(d),
+        completed: false,
+        // 붙여넣기는 원본과의 연결 관계는 잘라내고 순수 복제만
+        repeat: undefined,
+        repeatGroupId: undefined,
+        parentBlockId: undefined,
+        nextBlockId: undefined,
+        templateId: undefined,
+      };
+    });
+
+    // 겹침 필터 — 기존 블록 & 붙여넣기 중인 다른 블록끼리도 검사
+    const current = blocksRefTop.current;
+    const allowed: Block[] = [];
+    for (const nb of candidates) {
+      const sMin = nb.startH * 60 + nb.startM;
+      const eMin = nb.endH * 60 + nb.endM;
+      const conflictsExisting = overlapsBlock(current, nb.date, sMin, eMin);
+      const conflictsSelf = allowed.some(a => a.date === nb.date &&
+        sMin < a.endH * 60 + a.endM && eMin > a.startH * 60 + a.startM);
+      if (!conflictsExisting && !conflictsSelf) allowed.push(nb);
+    }
+    if (allowed.length === 0) return;
+
+    try {
+      const real = await insertBlocksBulk(allowed);
+      setBlocks(bs => [...bs, ...real]);
+      const ids = real.map(b => b.id);
+      pushUndo(async () => {
+        setBlocks(bs => bs.filter(b => !ids.includes(b.id)));
+        for (const id of ids) { try { await deleteBlockRow(id); } catch {} }
+      });
+    } catch (e) { notifyError("붙여넣기 실패")(e); }
+  };
+
+  // 다중 삭제 — 우클릭 메뉴 등에서 사용. 실행 취소로 재삽입.
+  const bulkDeleteBlocks = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const current = blocksRefTop.current;
+    const targets = current.filter(b => ids.includes(b.id));
+    if (targets.length === 0) return;
+    setBlocks(bs => bs.filter(b => !ids.includes(b.id)));
+    setSelectedBlock(prev => (prev && ids.includes(prev.id) ? null : prev));
+    for (const id of ids) { deleteBlockRow(id).catch(notifyError("블록 삭제 실패")); }
+    // 실행 취소: 원래 블록들 다시 insert. FK 없는 필드만 복원(연결/부모 관계는 컴플렉스라 생략).
+    pushUndo(async () => {
+      try {
+        const restored = await insertBlocksBulk(targets.map(t => ({ ...t, parentBlockId: undefined, nextBlockId: undefined, templateId: undefined })));
+        setBlocks(bs => [...bs, ...restored]);
+      } catch (e) { notifyError("복구 실패")(e); }
+    });
+  };
+
+  // 여러 블록에 동일 반복 규칙 적용 — 우클릭 → 반복 설정. 각 블록에 대해 setBlockRepeat 호출.
+  const bulkSetRepeatForBlocks = (ids: string[], repeat: BlockRepeat) => {
+    for (const id of ids) setBlockRepeat(id, repeat);
   };
 
   const deleteRepeatGroup = (id: string, fromDate: string) => {
@@ -1052,6 +1227,13 @@ export default function App() {
               paletteColors={paletteColors}
               onAddPaletteColor={addPaletteColor}
               onRemovePaletteColor={removePaletteColor}
+              blockClipboard={blockClipboard}
+              setBlockClipboard={setBlockClipboard}
+              onBulkMove={bulkMoveBlocks}
+              onPasteBlocks={pasteBlocks}
+              onBulkDelete={bulkDeleteBlocks}
+              onBulkSetRepeat={bulkSetRepeatForBlocks}
+              pushUndo={pushUndo}
             />
           )}
           {section === "deadlines" && (
@@ -1635,6 +1817,7 @@ function CalendarSection({
   templateOpen, setTemplateOpen, onSelect, onToggle, onToggleDeadline, onAddBlock, onUpdateBlock, onUpdateBlockLocal, onDeleteBlock,
   scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate, onAddTemplate, onDeleteBlockTemplate,
   paletteColors, onAddPaletteColor, onRemovePaletteColor,
+  blockClipboard, setBlockClipboard, onBulkMove, onPasteBlocks, onBulkDelete, onBulkSetRepeat, pushUndo,
 }: {
   blocks: Block[];
   deadlines: Deadline[];
@@ -1661,6 +1844,13 @@ function CalendarSection({
   paletteColors: string[];
   onAddPaletteColor: (color: string) => void;
   onRemovePaletteColor: (color: string) => void;
+  blockClipboard: Block[];
+  setBlockClipboard: (bs: Block[]) => void;
+  onBulkMove: (moves: Array<{ id: string; newDate: string; newStartMin: number }>) => Promise<void>;
+  onPasteBlocks: (source: Block[], targetDate: string) => Promise<void>;
+  onBulkDelete: (ids: string[]) => Promise<void>;
+  onBulkSetRepeat: (ids: string[], repeat: BlockRepeat) => void;
+  pushUndo: (fn: () => Promise<void> | void) => void;
 }) {
   const HOUR_H = 64;
   const TOTAL_H = 24;
@@ -1691,8 +1881,125 @@ function CalendarSection({
     startY: number; origStartMin: number; origEndMin: number; blockDate: string;
   } | null>(null);
 
+  // ── 다중 선택 상태 ────────────────────────────────────────────────
+  // Windows 파일탐색기처럼 여러 블록을 한꺼번에 다루기 위한 선택 세트.
+  // - Ctrl/⌘+클릭: 토글
+  // - 빈 영역 mousedown → 드래그: 마퀴 사각형 (교차하는 블록 모두 선택)
+  // - Esc: 해제
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // 진행 중인 마퀴 — dayIdx 는 어느 요일 컬럼에서 시작했는지(마퀴는 한 컬럼 내부에서만 그어짐).
+  // startY/curY 는 그 컬럼의 상단 기준 픽셀 오프셋(스크롤 컨테이너 내부 좌표).
+  const [marquee, setMarquee] = useState<{ dayIdx: number; startY: number; curY: number } | null>(null);
+  // 우클릭 컨텍스트 메뉴 — 화면 절대 좌표.
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  // 다중 반복 설정 모달 열림 여부.
+  const [showMultiRepeat, setShowMultiRepeat] = useState(false);
+
   const blocksRef = useRef(topLevelBlocks);
   useEffect(() => { blocksRef.current = topLevelBlocks; }, [topLevelBlocks]);
+  const selectedIdsRef = useRef(selectedIds);
+  useEffect(() => { selectedIdsRef.current = selectedIds; }, [selectedIds]);
+  const viewDateRef = useRef<Date>(TODAY_DATE);
+
+  // 사용자 편의: 선택된 블록의 정보 (드래그 앵커 판정, 컨텍스트 메뉴 표시 등)
+  const selectedBlocks = topLevelBlocks.filter(b => selectedIds.has(b.id));
+
+  // 마우스 이동에 따라 마퀴가 확장되도록 document 레벨 리스너 부착.
+  // dayIdx 는 시작 시 결정된 컬럼에서만 계산되고, 세로 오프셋은 requestAnimationFrame 스로틀 없이
+  // 그대로 반영해도 60fps 렌더 압박이 크지 않음(단순 setState).
+  useEffect(() => {
+    if (!marquee) return;
+    const onMove = (e: MouseEvent) => {
+      // 시작 지점에서의 컬럼 상단 좌표를 담을 방법이 없어서, 대신 startY 를 절대 y 로 저장한 뒤
+      // curY 도 절대 y 로 유지. 렌더 시 실제 element 의 rect 로 상대 좌표를 다시 계산.
+      setMarquee(m => m ? { ...m, curY: e.clientY } : m);
+    };
+    const onUp = (e: MouseEvent) => {
+      // 마퀴 종료 시 dataset-marquee-column 속성이 붙은 요소 중 dayIdx 일치하는 것을 찾아 그 컬럼의
+      // 화면 좌표계와 마퀴 절대 좌표를 비교, 교차 블록을 선택 세트에 담음.
+      const col = document.querySelector(`[data-marquee-column="${marquee.dayIdx}"]`);
+      if (col) {
+        const rect = col.getBoundingClientRect();
+        const yA = Math.max(0, Math.min(marquee.startY, marquee.curY) - rect.top);
+        const yB = Math.max(0, Math.max(marquee.startY, marquee.curY) - rect.top);
+        // 이 컬럼의 dateStr 는 dayIdx 로 데이터셋에 붙여둠(data-date).
+        const dateStr = (col as HTMLElement).dataset.date;
+        if (dateStr) {
+          const hits = new Set<string>();
+          // 이미 Ctrl 눌린 상태로 마퀴 시작하면 기존 선택에 추가, 아니면 대체.
+          const additive = e.ctrlKey || e.metaKey || e.shiftKey;
+          if (additive) selectedIdsRef.current.forEach(id => hits.add(id));
+          for (const b of blocksRef.current) {
+            if (b.date !== dateStr) continue;
+            const bTop = (b.startH * 60 + b.startM) / 60 * HOUR_H;
+            const bBot = (b.endH * 60 + b.endM) / 60 * HOUR_H;
+            if (yA < bBot && yB > bTop) hits.add(b.id);
+          }
+          setSelectedIds(hits);
+        }
+      }
+      setMarquee(null);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [marquee]);
+
+  // Esc — 선택 해제 + 컨텍스트 메뉴 닫기
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelectedIds(new Set());
+        setCtxMenu(null);
+        setShowMultiRepeat(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Ctrl+C / Ctrl+V — 캘린더 뷰가 활성일 때만 유효. 입력 필드에서 타이핑 중이면 브라우저 기본
+  // 복사/붙여넣기를 방해하지 않도록 스킵.
+  useEffect(() => {
+    const isInInput = () => {
+      const t = document.activeElement as HTMLElement | null;
+      const tag = t?.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || (t as any)?.isContentEditable;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (isInInput()) return;
+      const key = e.key.toLowerCase();
+      if (key === "c" && !e.shiftKey) {
+        const picked = topLevelBlocks.filter(b => selectedIdsRef.current.has(b.id));
+        if (picked.length === 0) return;
+        e.preventDefault();
+        setBlockClipboard(picked);
+      } else if (key === "v" && !e.shiftKey) {
+        if (blockClipboard.length === 0) return;
+        e.preventDefault();
+        // 붙여넣기 대상 날짜: 일 뷰면 viewDate, 주 뷰면 viewDate 가 속한 주의 월요일(getWeekDays 참고).
+        // 사용자가 명시적으로 어느 셀에 놓고 싶으면 붙여넣기 후 드래그로 옮기면 됨.
+        onPasteBlocks(blockClipboard, toDateStr(viewDateRef.current));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [topLevelBlocks, blockClipboard, setBlockClipboard, onPasteBlocks]);
+
+  // 컨텍스트 메뉴 외부 클릭 시 닫기
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onClick = () => setCtxMenu(null);
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [ctxMenu]);
+
+  // viewDate 를 ref 로 미러링 — 키보드 붙여넣기 핸들러가 stale closure로 어제 뷰에 붙이지 않게.
+  useEffect(() => { viewDateRef.current = viewDate; }, [viewDate]);
 
   // The browser fires a synthetic "click" right after mouseup even when that mouseup ends a
   // resize drag (mousedown started on the resize handle, a child of the block). React's state
@@ -1864,32 +2171,60 @@ function CalendarSection({
             return (
               <div
                 key={di}
+                data-marquee-column={di}
+                data-date={dateStr}
                 className={`flex-1 relative border-l border-border min-w-0 ${isToday ? "bg-sky-50/10" : ""}`}
                 style={{ height: TOTAL_H * HOUR_H }}
-                onClick={e => {
-                  if (resizing || dragBlockId || dragTplId || justResizedRef.current) return;
+                // 빈 영역 mousedown = "새 블록 만들지 아니면 마퀴 드래그로 다중 선택할지" 결정.
+                // mousemove로 4px 이상 이동하면 마퀴로 승격되고, 그 사이 setMarquee 가 진행 상태를 채움.
+                // 그대로 mouseup 하면 새 블록 생성(기존 클릭 동작 유지). marquee 종료 시엔 새 블록을
+                // 만들지 않도록 mouseup 핸들러 안에서 marquee 여부를 확인.
+                onMouseDown={e => {
+                  if (e.button !== 0) return; // 좌클릭만
+                  if (resizing || dragBlockId || dragTplId) return;
                   const rect = e.currentTarget.getBoundingClientRect();
-                  const durMin = 60;
-                  // 15분 스냅 — 클릭한 위치의 분을 15의 배수로 반올림
-                  const rawMin = Math.max(0, Math.round(((e.clientY - rect.top) / HOUR_H) * 60 / 15) * 15);
-                  const startMin = Math.min(TOTAL_H * 60 - durMin, rawMin);
-                  const endMin = startMin + durMin;
-                  if (hasOverlapForDate(dateStr, startMin, endMin)) return;
-                  const newBlock: Block = {
-                    id: `b-${Date.now()}`,
-                    title: "새 블록",
-                    color: "#5AA9E6",
-                    startH: Math.floor(startMin / 60),
-                    startM: startMin % 60,
-                    endH: Math.floor(endMin / 60),
-                    endM: endMin % 60,
-                    completed: false,
-                    tags: [],
-                    memo: "",
-                    date: dateStr,
+                  const startAbsY = e.clientY;
+                  const startClickTs = Date.now();
+                  let becameMarquee = false;
+                  const onMove = (mv: MouseEvent) => {
+                    if (Math.abs(mv.clientY - startAbsY) > 4) {
+                      becameMarquee = true;
+                      setMarquee({ dayIdx: di, startY: startAbsY, curY: mv.clientY });
+                      document.removeEventListener("mousemove", onMove);
+                    }
                   };
-                  setHoverSlot(null);
-                  onAddBlock(newBlock, { openInline: true });
+                  const onUp = (up: MouseEvent) => {
+                    document.removeEventListener("mousemove", onMove);
+                    document.removeEventListener("mouseup", onUp);
+                    if (becameMarquee) return; // 마퀴가 시작됐다면 marquee useEffect 가 mouseup 을 처리
+                    // 짧게 눌렀다 뗀 클릭 — 새 블록 생성. Ctrl 조합이면 선택만 해제하고 스킵.
+                    if (up.ctrlKey || up.metaKey || up.shiftKey) return;
+                    if (Date.now() - startClickTs > 400) return; // 오래 누른 건 클릭 아님
+                    const durMin = 60;
+                    const rawMin = Math.max(0, Math.round(((up.clientY - rect.top) / HOUR_H) * 60 / 15) * 15);
+                    const startMin = Math.min(TOTAL_H * 60 - durMin, rawMin);
+                    const endMin = startMin + durMin;
+                    if (hasOverlapForDate(dateStr, startMin, endMin)) return;
+                    const newBlock: Block = {
+                      id: `b-${Date.now()}`,
+                      title: "새 블록",
+                      color: "#5AA9E6",
+                      startH: Math.floor(startMin / 60),
+                      startM: startMin % 60,
+                      endH: Math.floor(endMin / 60),
+                      endM: endMin % 60,
+                      completed: false,
+                      tags: [],
+                      memo: "",
+                      date: dateStr,
+                    };
+                    setHoverSlot(null);
+                    // 빈 영역 클릭은 선택 해제와 함께 새 블록 만들기
+                    setSelectedIds(new Set());
+                    onAddBlock(newBlock, { openInline: true });
+                  };
+                  document.addEventListener("mousemove", onMove);
+                  document.addEventListener("mouseup", onUp);
                 }}
                 onMouseMove={e => {
                   if (dragTplId || dragBlockId || resizing) return;
@@ -1913,8 +2248,38 @@ function CalendarSection({
                   e.preventDefault();
                   if (!dropTarget || dropTarget.dayIdx !== di) { setDropTarget(null); setDragTplId(null); setDragBlockId(null); return; }
 
-                  // ── Moving an existing block ──
+                  // ── 다중 블록 이동 (선택된 여러 블록을 함께 옮김) ──
+                  // dataTransfer 에 blockIds 배열이 담겨 있으면 다중 이동. 앵커(primary) 블록 기준의
+                  // 이동 벡터(dayDelta, minDelta) 를 계산한 뒤 각 블록에 그대로 적용.
+                  const blockIdsData = e.dataTransfer.getData("blockIds");
                   const movedBlockId = e.dataTransfer.getData("blockId");
+                  if (blockIdsData) {
+                    try {
+                      const ids: string[] = JSON.parse(blockIdsData);
+                      const primary = blocksRef.current.find(b => b.id === movedBlockId);
+                      if (primary) {
+                        const primaryOrigStart = primary.startH * 60 + primary.startM;
+                        const primaryNewStart = Math.max(0, dropTarget.startH * 60 + dropTarget.startM);
+                        const minDelta = primaryNewStart - primaryOrigStart;
+                        // dayDelta 는 primary 의 원본 date → dropTarget 의 dateStr 차이(일수)
+                        const origDate = parseLocalDate(primary.date);
+                        const targetDate = parseLocalDate(dateStr);
+                        const dayDelta = Math.round((targetDate.getTime() - origDate.getTime()) / 86400000);
+                        const moves = ids.map(id => {
+                          const b = blocksRef.current.find(x => x.id === id);
+                          if (!b) return null;
+                          const bOrigStart = b.startH * 60 + b.startM;
+                          const bDate = parseLocalDate(b.date);
+                          bDate.setDate(bDate.getDate() + dayDelta);
+                          return { id, newDate: toDateStr(bDate), newStartMin: bOrigStart + minDelta };
+                        }).filter((m): m is { id: string; newDate: string; newStartMin: number } => m !== null);
+                        onBulkMove(moves);
+                      }
+                    } catch (err) { console.error("bulk move parse failed", err); }
+                    setDropTarget(null); setDragBlockId(null); return;
+                  }
+
+                  // ── Moving an existing block (single) ──
                   if (movedBlockId) {
                     const block = blocksRef.current.find(b => b.id === movedBlockId);
                     if (block) {
@@ -1923,11 +2288,14 @@ function CalendarSection({
                       const newEnd = Math.min(TOTAL_H * 60, newStart + dur);
                       const adjustedStart = newEnd === TOTAL_H * 60 ? TOTAL_H * 60 - dur : newStart;
                       if (!hasOverlapForDate(dateStr, adjustedStart, adjustedStart + dur, movedBlockId)) {
+                        // 원 위치 캡처해서 Ctrl+Z 로 되돌릴 수 있게.
+                        const prev = { date: block.date, startH: block.startH, startM: block.startM, endH: block.endH, endM: block.endM };
                         onUpdateBlock(movedBlockId, {
                           date: dateStr,
                           startH: Math.floor(adjustedStart / 60), startM: adjustedStart % 60,
                           endH: Math.floor((adjustedStart + dur) / 60), endM: (adjustedStart + dur) % 60,
                         });
+                        pushUndo(() => onUpdateBlock(movedBlockId, prev));
                       }
                     }
                     setDropTarget(null); setDragBlockId(null); return;
@@ -2026,6 +2394,7 @@ function CalendarSection({
                   const top = sMin / 60 * HOUR_H;
                   const height = Math.max(20, (eMin - sMin) / 60 * HOUR_H - 2);
                   const isBeingDragged = dragBlockId === block.id;
+                  const isSelected = selectedIds.has(block.id);
                   return (
                     <div key={block.id}
                       draggable
@@ -2035,14 +2404,40 @@ function CalendarSection({
                         const offsetMin = Math.round((offsetPx / HOUR_H) * 60 / 15) * 15;
                         e.dataTransfer.setData("blockId", block.id);
                         e.dataTransfer.setData("blockOffsetMin", String(offsetMin));
+                        // 다중 선택 상태이고 이 블록이 그 안에 있으면 selectedIds 전체를 함께 옮김.
+                        // 아니라면 단일 이동으로 동작. (선택돼 있지 않은 블록을 드래그하면 그 하나만.)
+                        if (isSelected && selectedIds.size > 1) {
+                          e.dataTransfer.setData("blockIds", JSON.stringify(Array.from(selectedIds)));
+                        }
                         e.dataTransfer.effectAllowed = "move";
                         setDragBlockId(block.id);
                         setDragBlockOffsetMin(offsetMin);
                       }}
                       onDragEnd={() => { setDragBlockId(null); setDropTarget(null); }}
-                      className={`absolute left-0.5 right-0.5 rounded-lg overflow-hidden z-10 select-none group/block ${resizing?.blockId !== block.id && !isBeingDragged ? "cursor-grab hover:brightness-95" : ""} ${isBeingDragged ? "opacity-30" : ""}`}
+                      onContextMenu={e => {
+                        e.preventDefault();
+                        // 선택되지 않은 블록을 우클릭하면 그 블록만 선택 상태로 두고 메뉴 노출.
+                        if (!isSelected) setSelectedIds(new Set([block.id]));
+                        setCtxMenu({ x: e.clientX, y: e.clientY });
+                      }}
+                      className={`absolute left-0.5 right-0.5 rounded-lg overflow-hidden z-10 select-none group/block ${resizing?.blockId !== block.id && !isBeingDragged ? "cursor-grab hover:brightness-95" : ""} ${isBeingDragged ? "opacity-30" : ""} ${isSelected ? "ring-2 ring-primary ring-offset-1" : ""}`}
                       style={{ top, height, backgroundColor: block.color + "28", borderLeft: `3px solid ${block.color}`, opacity: block.completed ? 0.45 : isBeingDragged ? 0.3 : 1 }}
-                      onClick={e => { if (resizing || dragBlockId || justResizedRef.current) return; e.stopPropagation(); onSelect(block); }}
+                      onClick={e => {
+                        if (resizing || dragBlockId || justResizedRef.current) return;
+                        e.stopPropagation();
+                        // Ctrl/⌘+클릭: 선택 토글, 상세 패널은 열지 않음.
+                        if (e.ctrlKey || e.metaKey) {
+                          setSelectedIds(prev => {
+                            const next = new Set(prev);
+                            if (next.has(block.id)) next.delete(block.id); else next.add(block.id);
+                            return next;
+                          });
+                          return;
+                        }
+                        // 일반 클릭: 다른 선택은 해제하고 이 블록만 선택 + 상세 패널.
+                        setSelectedIds(new Set());
+                        onSelect(block);
+                      }}
                     >
                       <div className="absolute top-0 left-0 right-0 h-2.5 cursor-n-resize z-20"
                         onMouseDown={e => { e.stopPropagation(); e.preventDefault();
@@ -2072,6 +2467,22 @@ function CalendarSection({
                     </div>
                   );
                 })}
+
+                {/* 마퀴 선택 사각형 — 이 컬럼에서 시작된 마퀴일 때만 렌더.
+                     document 좌표계의 startY/curY 를 컬럼 rect 기준으로 다시 계산해서 표시. */}
+                {marquee?.dayIdx === di && (() => {
+                  const col = document.querySelector(`[data-marquee-column="${di}"]`);
+                  if (!col) return null;
+                  const rect = col.getBoundingClientRect();
+                  const yA = Math.max(0, Math.min(marquee.startY, marquee.curY) - rect.top);
+                  const yB = Math.max(0, Math.max(marquee.startY, marquee.curY) - rect.top);
+                  return (
+                    <div
+                      className="absolute left-0 right-0 border-2 border-primary/60 bg-primary/10 pointer-events-none z-30"
+                      style={{ top: yA, height: yB - yA }}
+                    />
+                  );
+                })()}
               </div>
             );
           })}
@@ -2464,6 +2875,149 @@ function CalendarSection({
           ? renderTimeGrid(viewDays)
           : renderListView()
         }
+      </div>
+
+      {/* 다중 선택 상태에서 우클릭 시 뜨는 컨텍스트 메뉴 — 화면 절대 좌표 위치.
+           바깥 클릭 리스너가 닫음(useEffect). mousedown 시 setCtxMenu(null) 이 발화하니
+           메뉴 내부 클릭엔 stopPropagation 로 닫힘 방지. */}
+      {ctxMenu && (
+        <div
+          onMouseDown={e => e.stopPropagation()}
+          className="fixed z-50 min-w-[180px] bg-card border border-border rounded-lg shadow-lg p-1 text-sm"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+        >
+          <div className="px-2 py-1 text-[10px] text-muted-foreground uppercase tracking-wide">
+            {selectedIds.size}개 블록
+          </div>
+          <button
+            onClick={() => { setShowMultiRepeat(true); setCtxMenu(null); }}
+            className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-muted transition-colors flex items-center gap-2"
+          >↻ 반복 설정</button>
+          <button
+            onClick={() => {
+              const picked = topLevelBlocks.filter(b => selectedIds.has(b.id));
+              if (picked.length > 0) setBlockClipboard(picked);
+              setCtxMenu(null);
+            }}
+            className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-muted transition-colors flex items-center gap-2"
+          ><Copy size={13} /> 복사 (Ctrl+C)</button>
+          <button
+            onClick={() => {
+              onPasteBlocks(blockClipboard, toDateStr(viewDate));
+              setCtxMenu(null);
+            }}
+            disabled={blockClipboard.length === 0}
+            className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-muted transition-colors flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-transparent"
+          ><Plus size={13} /> 붙여넣기 (Ctrl+V)</button>
+          <div className="h-px bg-border my-1" />
+          <button
+            onClick={() => {
+              const ids = Array.from(selectedIds);
+              onBulkDelete(ids);
+              setSelectedIds(new Set());
+              setCtxMenu(null);
+            }}
+            className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-2"
+          ><Trash2 size={13} /> 삭제</button>
+        </div>
+      )}
+
+      {/* 다중 반복 설정 모달 — 우클릭 → "반복 설정" 이 열림. 규칙 확정하면 선택된 모든 블록에
+           각각 setBlockRepeat 이 걸림. */}
+      {showMultiRepeat && (
+        <MultiRepeatModal
+          count={selectedIds.size}
+          onClose={() => setShowMultiRepeat(false)}
+          onApply={(repeat) => {
+            onBulkSetRepeat(Array.from(selectedIds), repeat);
+            setShowMultiRepeat(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// 여러 블록에 한꺼번에 적용할 반복 규칙을 정의하는 미니 모달.
+// 기존 상세 패널 안 반복 UI 와 형태를 맞춰서 일관성 있게. 저장 시 각 블록에 대해
+// bulkSetRepeatForBlocks 로 setBlockRepeat 을 호출 — 블록별 반복 그룹이 각각 만들어짐.
+function MultiRepeatModal({
+  count, onClose, onApply,
+}: {
+  count: number;
+  onClose: () => void;
+  onApply: (repeat: BlockRepeat) => void;
+}) {
+  const [type, setType] = useState<"daily" | "weekly">("daily");
+  const [days, setDays] = useState<number[]>([]);
+  const [endType, setEndType] = useState<"none" | "count" | "date">("none");
+  const [endCount, setEndCount] = useState(10);
+  const [endDate, setEndDate] = useState("");
+  const DAYS_LABEL = ["일", "월", "화", "수", "목", "금", "토"];
+  const toggleDay = (d: number) => setDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort());
+  const canApply = type === "daily" || days.length > 0;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="w-80 bg-card border border-border rounded-xl p-4 shadow-lg" onClick={e => e.stopPropagation()}>
+        <div className="text-sm font-semibold mb-1">반복 설정</div>
+        <div className="text-[11px] text-muted-foreground mb-4">{count}개 블록에 같은 규칙이 적용돼요</div>
+
+        <div className="space-y-3">
+          <div>
+            <div className="text-[11px] text-muted-foreground mb-1.5">반복 주기</div>
+            <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5">
+              {(["daily", "weekly"] as const).map(v => (
+                <button key={v} onClick={() => setType(v)}
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md transition-all ${type === v ? "bg-card shadow-sm font-medium" : "text-muted-foreground hover:text-foreground"}`}>
+                  {v === "daily" ? "매일" : "매주"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {type === "weekly" && (
+            <div>
+              <div className="text-[11px] text-muted-foreground mb-1.5">요일</div>
+              <div className="flex gap-1">
+                {DAYS_LABEL.map((label, i) => (
+                  <button key={i} onClick={() => toggleDay(i)}
+                    className={`flex-1 py-1.5 text-[11px] rounded-md border transition-colors ${days.includes(i) ? "border-primary bg-primary/10 text-primary" : "border-border bg-card text-muted-foreground hover:text-foreground"}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div className="text-[11px] text-muted-foreground mb-1.5">종료</div>
+            <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5 mb-2">
+              {([{ v: "none", label: "제한 없음" }, { v: "count", label: "N회" }, { v: "date", label: "날짜까지" }] as const).map(o => (
+                <button key={o.v} onClick={() => setEndType(o.v)}
+                  className={`flex-1 px-2 py-1.5 text-[11px] rounded-md transition-all ${endType === o.v ? "bg-card shadow-sm font-medium" : "text-muted-foreground hover:text-foreground"}`}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            {endType === "count" && (
+              <input type="number" min={1} value={endCount} onChange={e => setEndCount(Math.max(1, Number(e.target.value) || 1))}
+                className="w-full px-3 py-1.5 rounded-lg bg-muted text-xs outline-none focus:ring-2 focus:ring-inset focus:ring-ring" />
+            )}
+            {endType === "date" && (
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+                className="w-full px-3 py-1.5 rounded-lg bg-muted text-xs outline-none focus:ring-2 focus:ring-inset focus:ring-ring" />
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 mt-5">
+          <button onClick={onClose} className="flex-1 px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-muted transition-colors">취소</button>
+          <button
+            onClick={() => onApply({ type, days, endType, endCount, endDate })}
+            disabled={!canApply || (endType === "date" && !endDate)}
+            className="flex-1 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 disabled:opacity-40 transition-opacity"
+          >적용</button>
+        </div>
       </div>
     </div>
   );
