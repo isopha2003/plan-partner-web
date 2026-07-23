@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS todos (
   color TEXT NOT NULL DEFAULT '#5AA9E6',
   completed INTEGER NOT NULL DEFAULT 0,
   completed_at TEXT,
+  memo TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -145,8 +146,10 @@ const BLOCK_TEMPLATE_UPGRADES = [
 ];
 
 // todos 에 color 컬럼 사후 추가 — 시간 블록과 같은 스트라이프 UI 를 위해 색상 필요.
+// memo 컬럼도 사후 추가 — 시간 블록처럼 상세 패널에서 자유 메모 저장.
 const TODO_UPGRADES = [
   "ALTER TABLE todos ADD COLUMN color TEXT NOT NULL DEFAULT '#5AA9E6'",
+  "ALTER TABLE todos ADD COLUMN memo TEXT NOT NULL DEFAULT ''",
 ];
 
 let dbPromise: Promise<Database> | null = null;

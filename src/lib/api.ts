@@ -296,6 +296,7 @@ export interface Todo {
   endDate: string | null;
   color: string;
   completed: boolean;
+  memo: string;
   sortOrder: number;
 }
 
@@ -311,22 +312,24 @@ export async function fetchTodos(): Promise<Todo[]> {
     endDate: r.end_date ?? null,
     color: r.color ?? DEFAULT_TODO_COLOR,
     completed: !!r.completed,
+    memo: r.memo ?? "",
     sortOrder: r.sort_order ?? 0,
   }));
 }
 
-export async function createTodo(t: { title: string; date: string; endDate?: string | null; color?: string }): Promise<Todo> {
+export async function createTodo(t: { title: string; date: string; endDate?: string | null; color?: string; memo?: string }): Promise<Todo> {
   const db = await getDb();
   const id = uuid();
   const color = t.color ?? DEFAULT_TODO_COLOR;
+  const memo = t.memo ?? "";
   await db.execute(
-    "INSERT INTO todos (id, title, date, end_date, color, completed, sort_order) VALUES (?, ?, ?, ?, ?, 0, 0)",
-    [id, t.title, t.date, t.endDate ?? null, color]
+    "INSERT INTO todos (id, title, date, end_date, color, completed, memo, sort_order) VALUES (?, ?, ?, ?, ?, 0, ?, 0)",
+    [id, t.title, t.date, t.endDate ?? null, color, memo]
   );
-  return { id, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, sortOrder: 0 };
+  return { id, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, memo, sortOrder: 0 };
 }
 
-export async function updateTodo(id: string, changes: { title?: string; date?: string; endDate?: string | null; color?: string; sortOrder?: number }): Promise<void> {
+export async function updateTodo(id: string, changes: { title?: string; date?: string; endDate?: string | null; color?: string; memo?: string; sortOrder?: number }): Promise<void> {
   const db = await getDb();
   const sets: string[] = [];
   const vals: any[] = [];
@@ -334,6 +337,7 @@ export async function updateTodo(id: string, changes: { title?: string; date?: s
   if (changes.date !== undefined) { sets.push("date = ?"); vals.push(changes.date); }
   if (changes.endDate !== undefined) { sets.push("end_date = ?"); vals.push(changes.endDate ?? null); }
   if (changes.color !== undefined) { sets.push("color = ?"); vals.push(changes.color); }
+  if (changes.memo !== undefined) { sets.push("memo = ?"); vals.push(changes.memo); }
   if (changes.sortOrder !== undefined) { sets.push("sort_order = ?"); vals.push(changes.sortOrder); }
   if (sets.length === 0) return;
   vals.push(id);

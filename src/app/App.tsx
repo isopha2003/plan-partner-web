@@ -241,6 +241,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedBlock, setSelectedBlock] = useState<Block | null>(null);
+  // 할 일도 시간 블록처럼 상세 패널로 색상/메모 편집 가능. selectedBlock 과 상호배타 —
+  // 하나가 열리면 다른 하나는 닫힘 (같은 오른쪽 패널 자리를 씀).
+  const [selectedTodo, setSelectedTodo] = useState<Todo | null>(null);
+  const openBlockDetail = (b: Block | null) => { setSelectedBlock(b); if (b) setSelectedTodo(null); };
+  const openTodoDetail = (t: Todo | null) => { setSelectedTodo(t); if (t) setSelectedBlock(null); };
   // 캘린더 클릭으로 방금 만들어진 블록 id — 상세 패널이 제목 편집 모드로 자동 진입하고,
   // 이 블록의 제목이 처음 저장될 때 매칭 템플릿을 좌측 사이드바에 자동 추가하는 트리거로 씀.
   const [justCreatedBlockId, setJustCreatedBlockId] = useState<string | null>(null);
@@ -694,7 +699,7 @@ export default function App() {
       insertBlock(block)
         .then(real => {
           setBlocks(bs => [...bs, real]);
-          setSelectedBlock(real);
+          openBlockDetail(real);
           if (options.openInline) setJustCreatedBlockId(real.id);
         })
         .catch(notifyError("블록 추가 실패"));
@@ -1076,7 +1081,7 @@ export default function App() {
     // 같은 날짜의 기존 todo 중 최대 sort_order + 1 을 부여해 새 항목이 맨 아래로 붙게 함.
     const nextSort = Math.max(-1, ...todos.filter(x => x.date === t.date).map(x => x.sortOrder)) + 1;
     const color = t.color ?? "#5AA9E6";
-    setTodos(ts => [...ts, { id: tempId, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, sortOrder: nextSort }]);
+    setTodos(ts => [...ts, { id: tempId, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, memo: "", sortOrder: nextSort }]);
     createTodo(t)
       .then(real => {
         setTodos(ts => ts.map(x => (x.id === tempId ? { ...real, sortOrder: nextSort } : x)));
@@ -1092,16 +1097,18 @@ export default function App() {
     if (!target) return;
     const nextCompleted = !target.completed;
     setTodos(ts => ts.map(t => t.id === id ? { ...t, completed: nextCompleted } : t));
+    setSelectedTodo(prev => (prev && prev.id === id ? { ...prev, completed: nextCompleted } : prev));
     toggleTodoRow(id, nextCompleted).catch(notifyError("todo 완료 저장 실패"));
   };
   const deleteTodo = (id: string) => {
     const snapshot = todos.find(t => t.id === id);
     setTodos(ts => ts.filter(t => t.id !== id));
+    setSelectedTodo(prev => (prev?.id === id ? null : prev));
     deleteTodoRow(id).catch(notifyError("todo 삭제 실패"));
     if (snapshot) {
       pushUndo(async () => {
         try {
-          const restored = await createTodo({ title: snapshot.title, date: snapshot.date, endDate: snapshot.endDate, color: snapshot.color });
+          const restored = await createTodo({ title: snapshot.title, date: snapshot.date, endDate: snapshot.endDate, color: snapshot.color, memo: snapshot.memo });
           setTodos(ts => [...ts, restored]);
         } catch (e) { notifyError("todo 복구 실패")(e); }
       });
@@ -1109,7 +1116,18 @@ export default function App() {
   };
   const updateTodoTitle = (id: string, title: string) => {
     setTodos(ts => ts.map(t => t.id === id ? { ...t, title } : t));
+    setSelectedTodo(prev => (prev && prev.id === id ? { ...prev, title } : prev));
     updateTodo(id, { title }).catch(notifyError("todo 저장 실패"));
+  };
+  const updateTodoMemo = (id: string, memo: string) => {
+    setTodos(ts => ts.map(t => t.id === id ? { ...t, memo } : t));
+    setSelectedTodo(prev => (prev && prev.id === id ? { ...prev, memo } : prev));
+    updateTodo(id, { memo }).catch(notifyError("todo 메모 저장 실패"));
+  };
+  const updateTodoColor = (id: string, color: string) => {
+    setTodos(ts => ts.map(t => t.id === id ? { ...t, color } : t));
+    setSelectedTodo(prev => (prev && prev.id === id ? { ...prev, color } : prev));
+    updateTodo(id, { color }).catch(notifyError("todo 색상 저장 실패"));
   };
 
   // 드래그로 todo 를 다른 컬럼(날짜)/위치로 옮기거나, 다른 todo 위에 놓아 두 todo 순서를 교체.
@@ -1276,7 +1294,8 @@ export default function App() {
               onAddTodo={addTodo}
               onReorderTodos={reorderTodos}
               onSwapTodo={swapTodos}
-              onSelect={setSelectedBlock}
+              onSelect={openBlockDetail}
+              onSelectTodo={openTodoDetail}
               onGoToCalendar={() => setSection("calendar")}
             />
           )}
@@ -1291,7 +1310,8 @@ export default function App() {
               setCalMode={setCalMode}
               templateOpen={templateOpen}
               setTemplateOpen={setTemplateOpen}
-              onSelect={setSelectedBlock}
+              onSelect={openBlockDetail}
+              onSelectTodo={openTodoDetail}
               onToggle={toggleBlock}
               onToggleDeadline={toggleDeadline}
               onAddBlock={addBlock}
@@ -1420,6 +1440,24 @@ export default function App() {
               updateBlock(selectedBlock.id, { nextBlockId } as Partial<Block>);
               setSelectedBlock({ ...selectedBlock, nextBlockId: nextBlockId ?? undefined });
             }}
+          />
+        )}
+
+        {/* Todo detail side panel — 시간 블록의 상세 패널과 같은 자리에 뜨는 라이트 버전.
+             선택된 todo 를 갱신하면 컴포넌트 내부 state 는 리마운트되어 새 값을 로드. */}
+        {selectedTodo && !selectedBlock && (
+          <TodoDetailPanel
+            key={selectedTodo.id}
+            todo={selectedTodo}
+            paletteColors={paletteColors}
+            onAddPaletteColor={addPaletteColor}
+            onRemovePaletteColor={removePaletteColor}
+            onClose={() => setSelectedTodo(null)}
+            onToggle={() => toggleTodo(selectedTodo.id)}
+            onDelete={() => deleteTodo(selectedTodo.id)}
+            onTitleSave={(title) => updateTodoTitle(selectedTodo.id, title)}
+            onColorSave={(color) => updateTodoColor(selectedTodo.id, color)}
+            onMemoSave={(memo) => updateTodoMemo(selectedTodo.id, memo)}
           />
         )}
       </div>
@@ -1762,7 +1800,7 @@ function CircleProgress({ value, size, strokeWidth = 5 }: { value: number; size:
 
 // ── Today Section ──────────────────────────────────────────────────
 function TodaySection({
-  blocks, deadlines, todos, completionRate, onToggle, onToggleDeadline, onToggleTodo, onDeleteTodo, onAddTodo, onReorderTodos, onSwapTodo, onSelect, onGoToCalendar,
+  blocks, deadlines, todos, completionRate, onToggle, onToggleDeadline, onToggleTodo, onDeleteTodo, onAddTodo, onReorderTodos, onSwapTodo, onSelect, onSelectTodo, onGoToCalendar,
 }: {
   blocks: Block[];
   deadlines: Deadline[];
@@ -1776,6 +1814,7 @@ function TodaySection({
   onReorderTodos?: (targets: { id: string; date: string; sortOrder: number }[]) => void;
   onSwapTodo?: (aId: string, bId: string) => void;
   onSelect: (b: Block) => void;
+  onSelectTodo?: (t: Todo) => void;
   onGoToCalendar: () => void;
 }) {
   const sorted = [...blocks].sort((a, b) => a.startH * 60 + a.startM - (b.startH * 60 + b.startM));
@@ -1892,8 +1931,9 @@ function TodaySection({
                   onSwapTodo(otherId, t.id);
                   setDragTodoId(null); setSwapTargetId(null);
                 }}
+                onClick={() => onSelectTodo?.(t)}
                 className={`group/todo flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
-                  onSwapTodo ? "cursor-grab active:cursor-grabbing" : ""
+                  onSelectTodo ? "cursor-pointer" : onSwapTodo ? "cursor-grab active:cursor-grabbing" : ""
                 } ${
                   t.completed ? "bg-muted/40 border-transparent opacity-60"
                     : swapTargetId === t.id ? "bg-primary/10 border-primary ring-1 ring-primary/40"
@@ -1901,14 +1941,14 @@ function TodaySection({
                     : "bg-card border-border hover:border-primary/40"
                 }`}
               >
-                <button onClick={() => onToggleTodo(t.id)} className="flex-shrink-0">
+                <button onClick={e => { e.stopPropagation(); onToggleTodo(t.id); }} className="flex-shrink-0">
                   {t.completed
                     ? <CheckCircle2 size={16} style={{ color: t.color }} />
                     : <Circle size={16} className="text-muted-foreground" />}
                 </button>
                 <span className="w-0.5 h-6 rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} />
                 <span className={`text-sm flex-1 min-w-0 truncate ${t.completed ? "line-through text-muted-foreground" : ""}`}>{t.title}</span>
-                <button onClick={() => onDeleteTodo(t.id)}
+                <button onClick={e => { e.stopPropagation(); onDeleteTodo(t.id); }}
                   className="opacity-0 group-hover/todo:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
                 ><X size={13} /></button>
               </div>
@@ -1992,7 +2032,7 @@ function TodaySection({
 // ── Calendar Section ───────────────────────────────────────────────
 function CalendarSection({
   blocks, deadlines, templates, calView, setCalView, calMode, setCalMode,
-  templateOpen, setTemplateOpen, onSelect, onToggle, onToggleDeadline, onAddBlock, onUpdateBlock, onUpdateBlockLocal, onDeleteBlock,
+  templateOpen, setTemplateOpen, onSelect, onSelectTodo, onToggle, onToggleDeadline, onAddBlock, onUpdateBlock, onUpdateBlockLocal, onDeleteBlock,
   onAddTemplate, onDeleteBlockTemplate,
   paletteColors, onAddPaletteColor, onRemovePaletteColor,
   blockClipboard, setBlockClipboard, onBulkMove, onPasteBlocks, onBulkDelete, onBulkSetRepeat, pushUndo,
@@ -2008,6 +2048,7 @@ function CalendarSection({
   templateOpen: boolean;
   setTemplateOpen: (v: boolean) => void;
   onSelect: (b: Block) => void;
+  onSelectTodo?: (t: Todo) => void;
   onToggle: (id: string) => void;
   onToggleDeadline: (id: string) => void;
   onAddBlock: (block: Block, options?: { select?: boolean; openInline?: boolean }) => void;
@@ -2935,14 +2976,15 @@ function CalendarSection({
                     })}
                   </div>
                 )}
-                {/* Todo — 마감 아래. 시간 블록과 동일한 왼쪽 색 스트라이프 + 배경 톤. */}
+                {/* Todo — 마감 아래. 시간 블록과 동일한 왼쪽 색 스트라이프 + 배경 톤.
+                     클릭 → 상세 패널 (색상/메모 편집). 시간 블록과 동일한 인터랙션. */}
                 <div className="space-y-0.5">
                   {dayTodos.map(t => (
                     <div key={t.id}
-                      onClick={e => { e.stopPropagation(); onToggleTodo(t.id); }}
+                      onClick={e => { e.stopPropagation(); onSelectTodo?.(t); }}
                       className={`rounded overflow-hidden text-[9px] cursor-pointer transition-all ${t.completed ? "opacity-60" : "hover:brightness-95"}`}
                       style={{ backgroundColor: t.color + "28", borderLeft: `3px solid ${t.color}` }}
-                      title={t.completed ? "완료 해제" : "완료 처리"}
+                      title="상세 열기"
                     >
                       <span
                         className={`truncate leading-tight block px-1 py-0.5 font-medium ${t.completed ? "line-through" : ""}`}
@@ -3402,6 +3444,7 @@ function CalendarSection({
                   onToggle={onToggleTodo}
                   onDelete={onDeleteTodo}
                   onUpdateTitle={onUpdateTodoTitle}
+                  onSelectTodo={onSelectTodo}
                   deadlines={deadlines}
                   onToggleDeadline={onToggleDeadline}
                   showDayHeader={contentView === "todos"}
@@ -3485,7 +3528,7 @@ function CalendarSection({
 // 그 안에 마감 → todo 순으로 노출. 마감은 빨간 톤, todo 는 카드 스타일 체크박스. 새 todo 추가는
 // 각 컬럼 하단 입력창. 실시간 편집은 title 클릭 → inline input.
 function TodoPanel({
-  todos, viewDays, onAdd, onToggle, onDelete, onUpdateTitle,
+  todos, viewDays, onAdd, onToggle, onDelete, onUpdateTitle, onSelectTodo,
   deadlines, onToggleDeadline,
   showDayHeader, onGoPrev, onGoNext, onMoveTodo, onSwapTodo, onReorderTodos,
 }: {
@@ -3495,6 +3538,8 @@ function TodoPanel({
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
+  // 할 일 셀 클릭 → 상세 패널 열기. 없으면 기존 인라인 편집 fallback.
+  onSelectTodo?: (t: Todo) => void;
   // 할 일만 보는 모드(showDayHeader=true) 에서만 자체 마감 행을 그림. 시간 그리드가 함께 보일
   // 땐 그쪽 상단의 마감 행이 유일한 소스.
   deadlines: Deadline[];
@@ -3716,10 +3761,16 @@ function TodoPanel({
                       style={{ color: t.color }}
                     />
                   ) : (
+                    /* 클릭 → 상세 패널(시간 블록과 동일). 인라인 제목 편집이 필요하면 더블클릭. */
                     <button
-                      onClick={() => { setEditingDraft(t.title); setEditingId(t.id); }}
+                      onClick={() => {
+                        if (onSelectTodo) onSelectTodo(t);
+                        else { setEditingDraft(t.title); setEditingId(t.id); }
+                      }}
+                      onDoubleClick={e => { e.stopPropagation(); setEditingDraft(t.title); setEditingId(t.id); }}
                       className={`w-full min-w-0 text-left truncate px-1.5 py-1 text-[10px] font-semibold ${t.completed ? "line-through" : ""}`}
                       style={{ color: t.color }}
+                      title="클릭: 상세 열기 · 더블클릭: 제목 편집"
                     >{t.title}</button>
                   )}
                   {/* 우측 상단 hover 액션 — 완료 토글/삭제. 시간 블록의 hover X 버튼과 동일 톤. */}
@@ -5944,5 +5995,160 @@ function NewChecklistItemForm({
         <button type="submit" className="text-[11px] text-sky-600 hover:text-sky-700 px-1.5">추가</button>
       )}
     </form>
+  );
+}
+
+// ── Todo detail side panel ─────────────────────────────────────────
+// 시간 블록의 BlockDetailPanel 과 같은 자리에 뜨는 라이트 버전. 시간 블록에 있는
+// 반복/자식 블록/습관 스태킹/체크리스트 같은 기능은 없이 제목·색상·메모·완료·삭제만.
+function TodoDetailPanel({
+  todo, paletteColors, onAddPaletteColor, onRemovePaletteColor,
+  onClose, onToggle, onDelete, onTitleSave, onColorSave, onMemoSave,
+}: {
+  todo: Todo;
+  paletteColors: string[];
+  onAddPaletteColor: (color: string) => void;
+  onRemovePaletteColor: (color: string) => void;
+  onClose: () => void;
+  onToggle: () => void;
+  onDelete: () => void;
+  onTitleSave: (title: string) => void;
+  onColorSave: (color: string) => void;
+  onMemoSave: (memo: string) => void;
+}) {
+  const [memo, setMemo] = useState(todo.memo);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(todo.title);
+  const [showCustomColor, setShowCustomColor] = useState(false);
+  const commitTitle = () => {
+    const trimmed = titleDraft.trim();
+    if (trimmed && trimmed !== todo.title) onTitleSave(trimmed);
+    else setTitleDraft(todo.title);
+    setEditingTitle(false);
+  };
+
+  return (
+    <div className="w-72 flex-shrink-0 border-l border-border bg-card flex flex-col overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-border flex-shrink-0">
+        <span className="size-3 rounded-sm flex-shrink-0" style={{ backgroundColor: todo.color }} />
+        {editingTitle ? (
+          <input
+            autoFocus
+            value={titleDraft}
+            onChange={e => setTitleDraft(e.target.value)}
+            onFocus={e => e.currentTarget.select()}
+            onBlur={commitTitle}
+            onKeyDown={e => {
+              if (e.key === "Enter") { e.preventDefault(); commitTitle(); }
+              else if (e.key === "Escape") { setTitleDraft(todo.title); setEditingTitle(false); }
+            }}
+            className="flex-1 min-w-0 text-sm font-medium bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-1 py-0.5"
+          />
+        ) : (
+          <button
+            onClick={() => { setTitleDraft(todo.title); setEditingTitle(true); }}
+            title="제목 편집"
+            className="flex-1 min-w-0 text-left text-sm font-medium truncate hover:bg-muted/40 rounded px-1 py-0.5 transition-colors"
+          >
+            {todo.title}
+          </button>
+        )}
+        <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors flex-shrink-0">
+          <X size={13} className="text-muted-foreground" />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-5">
+        {/* 날짜 */}
+        <div>
+          <div className="text-[11px] font-medium text-muted-foreground mb-1.5">날짜</div>
+          <div className="px-3 py-2.5 rounded-lg bg-muted/40 border border-border">
+            <div className="text-sm font-medium">
+              {todo.date} ({DAYS_KO[parseLocalDate(todo.date).getDay()]})
+              {todo.endDate && todo.endDate !== todo.date && (
+                <span className="text-muted-foreground"> ~ {todo.endDate}</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 완료 토글 */}
+        <button
+          onClick={onToggle}
+          className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border transition-colors ${
+            todo.completed ? "bg-muted/40 border-transparent" : "bg-card border-border hover:border-primary/40"
+          }`}
+        >
+          {todo.completed
+            ? <CheckCircle2 size={16} style={{ color: todo.color }} />
+            : <Circle size={16} className="text-muted-foreground" />}
+          <span className={`text-xs ${todo.completed ? "text-muted-foreground line-through" : ""}`}>
+            {todo.completed ? "완료됨 — 다시 열기" : "완료 처리"}
+          </span>
+        </button>
+
+        {/* 색상 — 시간 블록과 같은 팔레트 공유 */}
+        <div>
+          <div className="text-[11px] font-medium text-muted-foreground mb-2">색상</div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {paletteColors.map(c => (
+              <div key={c} className="relative group/color size-6 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onColorSave(c)}
+                  className={`size-6 rounded-full transition-transform ${todo.color.toLowerCase() === c.toLowerCase() ? "ring-2 ring-offset-1 ring-offset-card ring-foreground/40 scale-110" : ""}`}
+                  style={{ backgroundColor: c }}
+                  title={c}
+                />
+                <button
+                  type="button"
+                  onClick={e => { e.stopPropagation(); onRemovePaletteColor(c); }}
+                  className="absolute -top-1 -right-1 size-3.5 rounded-full bg-card border border-border text-muted-foreground hover:text-destructive opacity-0 group-hover/color:opacity-100 transition-opacity flex items-center justify-center shadow-sm"
+                  title="팔레트에서 제거"
+                >
+                  <X size={8} strokeWidth={2.5} />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowCustomColor(v => !v)}
+              className={`size-6 rounded-full border flex items-center justify-center transition-colors flex-shrink-0 ${showCustomColor ? "border-primary/60 bg-primary/10" : "border-border/70 bg-muted/40 hover:bg-muted"}`}
+              title="사용자 지정 색상 추가"
+            >
+              <Plus size={12} className={showCustomColor ? "text-primary" : "text-muted-foreground"} />
+            </button>
+          </div>
+          {showCustomColor && (
+            <CustomColorPickerInline
+              initial={todo.color}
+              onAdd={(color) => { onColorSave(color); onAddPaletteColor(color); }}
+              onClose={() => setShowCustomColor(false)}
+            />
+          )}
+        </div>
+
+        {/* Memo */}
+        <div>
+          <div className="text-[11px] font-medium text-muted-foreground mb-1.5">메모</div>
+          <textarea
+            value={memo}
+            onChange={e => setMemo(e.target.value)}
+            onBlur={() => { if (memo !== todo.memo) onMemoSave(memo); }}
+            placeholder="자유롭게 메모하세요..."
+            className="w-full h-24 px-3 py-2 text-xs bg-muted rounded-lg resize-none outline-none focus:ring-2 focus:ring-ring text-foreground placeholder:text-muted-foreground"
+          />
+        </div>
+
+        {/* Delete */}
+        <button
+          onClick={() => { onDelete(); onClose(); }}
+          className="w-full text-[11px] text-destructive hover:bg-destructive/10 rounded-lg py-2 transition-colors"
+        >
+          할 일 삭제
+        </button>
+      </div>
+    </div>
   );
 }
