@@ -98,6 +98,22 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Todos — 시간이 지정되지 않은 날짜별 할 일. 마감(deadline)은 데드라인 카운트다운 성격이
+-- 강하고 시간 블록(blocks)은 특정 시간대 점유가 필요하지만, todo는 그 사이 — "이 날 하기로 한
+-- 것" 이라는 가벼운 체크박스 아이템. end_date 로 다중일 확장(향후).
+CREATE TABLE IF NOT EXISTS todos (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  date TEXT NOT NULL,
+  end_date TEXT,
+  completed INTEGER NOT NULL DEFAULT 0,
+  completed_at TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS todos_date_idx ON todos (date);
+
 CREATE INDEX IF NOT EXISTS blocks_date_idx ON blocks (date);
 CREATE INDEX IF NOT EXISTS blocks_parent_idx ON blocks (parent_block_id);
 CREATE INDEX IF NOT EXISTS checklist_items_block_idx ON checklist_items (block_id);

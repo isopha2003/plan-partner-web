@@ -12,6 +12,7 @@ import {
   fetchTemplates, createTemplate, deleteTemplateRow, fetchBlocks, insertBlock, patchBlock, deleteBlockRow,
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, deleteRepeatInstancesExceptOrigin, insertBlocksBulk,
   fetchDeadlines, createDeadline, toggleDeadlineRow, deleteDeadlineRow,
+  fetchTodos, createTodo, updateTodo, toggleTodoRow, deleteTodoRow, type Todo,
   fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
   fetchTodaySessions, startTimerSession, endTimerSession, deleteTodaySessions, fetchFocusSecByDate,
   fetchChecklistItems, createChecklistItem, toggleChecklistItemRow, deleteChecklistItemRow,
@@ -200,6 +201,7 @@ export default function App() {
   const [section, setSection] = useState<Section>("today");
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [deadlines, setDeadlines] = useState<Deadline[]>([]);
+  const [todos, setTodos] = useState<Todo[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [scheduleTemplates, setScheduleTemplates] = useState<ScheduleTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -242,13 +244,14 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [tpls, blks, dls, sts] = await Promise.all([
-          fetchTemplates(), fetchBlocks(), fetchDeadlines(), fetchScheduleTemplates(),
+        const [tpls, blks, dls, sts, tds] = await Promise.all([
+          fetchTemplates(), fetchBlocks(), fetchDeadlines(), fetchScheduleTemplates(), fetchTodos(),
         ]);
         setTemplates(tpls);
         setBlocks(blks);
         setDeadlines(dls);
         setScheduleTemplates(sts);
+        setTodos(tds);
       } catch (e: any) {
         setLoadError(e.message ?? "데이터를 불러오지 못했어요");
       } finally {
@@ -1074,6 +1077,40 @@ export default function App() {
       .catch(e => { setDeadlines(ds => ds.filter(x => x.id !== tempId)); notifyError("마감 추가 실패")(e); });
   };
 
+  // ── todos ─────────────────────────────────────────────────
+  const addTodo = (t: { title: string; date: string; endDate?: string | null }) => {
+    if (!t.title.trim()) return;
+    const tempId = `temp-${crypto.randomUUID()}`;
+    setTodos(ts => [...ts, { id: tempId, title: t.title, date: t.date, endDate: t.endDate ?? null, completed: false, sortOrder: 0 }]);
+    createTodo(t)
+      .then(real => setTodos(ts => ts.map(x => (x.id === tempId ? real : x))))
+      .catch(e => { setTodos(ts => ts.filter(x => x.id !== tempId)); notifyError("todo 추가 실패")(e); });
+  };
+  const toggleTodo = (id: string) => {
+    const target = todos.find(t => t.id === id);
+    if (!target) return;
+    const nextCompleted = !target.completed;
+    setTodos(ts => ts.map(t => t.id === id ? { ...t, completed: nextCompleted } : t));
+    toggleTodoRow(id, nextCompleted).catch(notifyError("todo 완료 저장 실패"));
+  };
+  const deleteTodo = (id: string) => {
+    const snapshot = todos.find(t => t.id === id);
+    setTodos(ts => ts.filter(t => t.id !== id));
+    deleteTodoRow(id).catch(notifyError("todo 삭제 실패"));
+    if (snapshot) {
+      pushUndo(async () => {
+        try {
+          const restored = await createTodo({ title: snapshot.title, date: snapshot.date, endDate: snapshot.endDate });
+          setTodos(ts => [...ts, restored]);
+        } catch (e) { notifyError("todo 복구 실패")(e); }
+      });
+    }
+  };
+  const updateTodoTitle = (id: string, title: string) => {
+    setTodos(ts => ts.map(t => t.id === id ? { ...t, title } : t));
+    updateTodo(id, { title }).catch(notifyError("todo 저장 실패"));
+  };
+
   const todayBlocks = blocks.filter(b => b.date === TODAY_STR && !b.parentBlockId);
   const completedCount = todayBlocks.filter(b => b.completed).length;
   const completionRate = todayBlocks.length > 0 ? Math.round((completedCount / todayBlocks.length) * 100) : 0;
@@ -1193,9 +1230,13 @@ export default function App() {
             <TodaySection
               blocks={todayBlocks}
               deadlines={deadlines.filter(d => !d.completed)}
+              todos={todos.filter(t => t.date === TODAY_STR || (t.endDate && TODAY_STR >= t.date && TODAY_STR <= t.endDate))}
               completionRate={completionRate}
               onToggle={toggleBlock}
               onToggleDeadline={toggleDeadline}
+              onToggleTodo={toggleTodo}
+              onDeleteTodo={deleteTodo}
+              onAddTodo={addTodo}
               onSelect={setSelectedBlock}
               onGoToCalendar={() => setSection("calendar")}
             />
@@ -1234,6 +1275,11 @@ export default function App() {
               onBulkDelete={bulkDeleteBlocks}
               onBulkSetRepeat={bulkSetRepeatForBlocks}
               pushUndo={pushUndo}
+              todos={todos}
+              onAddTodo={addTodo}
+              onToggleTodo={toggleTodo}
+              onDeleteTodo={deleteTodo}
+              onUpdateTodoTitle={updateTodoTitle}
             />
           )}
           {section === "deadlines" && (
@@ -1678,13 +1724,17 @@ function CircleProgress({ value, size, strokeWidth = 5 }: { value: number; size:
 
 // ── Today Section ──────────────────────────────────────────────────
 function TodaySection({
-  blocks, deadlines, completionRate, onToggle, onToggleDeadline, onSelect, onGoToCalendar,
+  blocks, deadlines, todos, completionRate, onToggle, onToggleDeadline, onToggleTodo, onDeleteTodo, onAddTodo, onSelect, onGoToCalendar,
 }: {
   blocks: Block[];
   deadlines: Deadline[];
+  todos: Todo[];
   completionRate: number;
   onToggle: (id: string) => void;
   onToggleDeadline: (id: string) => void;
+  onToggleTodo: (id: string) => void;
+  onDeleteTodo: (id: string) => void;
+  onAddTodo: (t: { title: string; date: string; endDate?: string | null }) => void;
   onSelect: (b: Block) => void;
   onGoToCalendar: () => void;
 }) {
@@ -1692,6 +1742,7 @@ function TodaySection({
   const done = blocks.filter(b => b.completed).length;
   const overdueDeadlines = deadlines.filter(d => d.dueDate < TODAY_STR);
   const todayDeadlines = deadlines.filter(d => d.dueDate === TODAY_STR);
+  const [todoDraft, setTodoDraft] = useState("");
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -1744,7 +1795,40 @@ function TodaySection({
           </div>
         )}
 
-        {/* Block list */}
+        {/* Todos — 마감과 시간 블록 사이. 체크박스로 완료 토글, 우측 X 로 삭제 */}
+        <div className="mb-4">
+          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">오늘 일정</div>
+          <div className="space-y-1.5">
+            {todos.map(t => (
+              <div key={t.id} className={`group/todo flex items-center gap-2.5 px-3 py-2 rounded-lg border bg-card hover:border-primary/40 transition-colors ${t.completed ? "opacity-60" : ""}`}>
+                <button onClick={() => onToggleTodo(t.id)} className="flex-shrink-0">
+                  {t.completed
+                    ? <CheckCircle2 size={16} className="text-primary" />
+                    : <Circle size={16} className="text-muted-foreground" />}
+                </button>
+                <span className={`text-sm flex-1 min-w-0 truncate ${t.completed ? "line-through" : ""}`}>{t.title}</span>
+                <button onClick={() => onDeleteTodo(t.id)}
+                  className="opacity-0 group-hover/todo:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                ><X size={13} /></button>
+              </div>
+            ))}
+            <input
+              value={todoDraft}
+              onChange={e => setTodoDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") {
+                  const v = todoDraft.trim();
+                  if (v) { onAddTodo({ title: v, date: TODAY_STR }); setTodoDraft(""); }
+                }
+              }}
+              placeholder="+ 새 일정"
+              className="w-full px-3 py-2 rounded-lg text-sm bg-transparent border border-dashed border-border/60 hover:border-primary/40 focus:border-primary outline-none placeholder:text-muted-foreground/60"
+            />
+          </div>
+        </div>
+
+        {/* Block list — 시간 단위 블록 (todo 와 구분해서 아래에) */}
+        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">오늘 시간표</div>
         <div className="space-y-2">
           {sorted.map(block => (
             <div
@@ -1818,6 +1902,7 @@ function CalendarSection({
   scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate, onAddTemplate, onDeleteBlockTemplate,
   paletteColors, onAddPaletteColor, onRemovePaletteColor,
   blockClipboard, setBlockClipboard, onBulkMove, onPasteBlocks, onBulkDelete, onBulkSetRepeat, pushUndo,
+  todos, onAddTodo, onToggleTodo, onDeleteTodo, onUpdateTodoTitle,
 }: {
   blocks: Block[];
   deadlines: Deadline[];
@@ -1851,6 +1936,11 @@ function CalendarSection({
   onBulkDelete: (ids: string[]) => Promise<void>;
   onBulkSetRepeat: (ids: string[], repeat: BlockRepeat) => void;
   pushUndo: (fn: () => Promise<void> | void) => void;
+  todos: Todo[];
+  onAddTodo: (t: { title: string; date: string; endDate?: string | null }) => void;
+  onToggleTodo: (id: string) => void;
+  onDeleteTodo: (id: string) => void;
+  onUpdateTodoTitle: (id: string, title: string) => void;
 }) {
   const HOUR_H = 64;
   const TOTAL_H = 24;
@@ -1892,6 +1982,11 @@ function CalendarSection({
   // 그리드 전체(여러 요일 컬럼 + 24시간 세로 축) 어느 지점이든 자유롭게 드래그 가능.
   const [marquee, setMarquee] = useState<{ startX: number; startY: number; curX: number; curY: number } | null>(null);
   const timeGridRef = useRef<HTMLDivElement>(null);
+  // 일/주 뷰 콘텐츠 모드 — grid(시간표만) / todos(일정만) / both(위 시간표 + 아래 일정 리스트).
+  const [contentView, setContentView] = useState<"grid" | "todos" | "both">("both");
+  // 월 뷰 셀 클릭으로 새 todo 인라인 입력 중인 날짜 & 각 셀 별 draft 입력값.
+  const [monthEditing, setMonthEditing] = useState<string | null>(null);
+  const [monthDrafts, setMonthDrafts] = useState<Record<string, string>>({});
   // 우클릭 컨텍스트 메뉴 — 화면 절대 좌표.
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // 다중 반복 설정 모달 열림 여부.
@@ -2161,10 +2256,9 @@ function CalendarSection({
                     key={d.id}
                     onClick={e => { e.stopPropagation(); onToggleDeadline(d.id); }}
                     title={d.completed ? "완료됨 — 다시 열기" : "완료 처리"}
-                    className={`w-full flex items-center gap-1 text-left text-[10px] px-1.5 py-0.5 rounded transition-colors ${d.completed ? "bg-muted/40 text-muted-foreground line-through" : "bg-red-100 text-red-700 hover:bg-red-200"}`}
+                    className={`w-full text-left text-[10px] px-1.5 py-0.5 rounded transition-colors ${d.completed ? "bg-muted/40 text-muted-foreground line-through" : "bg-red-100 text-red-700 hover:bg-red-200"}`}
                   >
-                    <Target size={9} className="flex-shrink-0" />
-                    <span className="truncate">{d.title}</span>
+                    <span className="truncate block">{d.title}</span>
                   </button>
                 ))}
               </div>
@@ -2332,6 +2426,9 @@ function CalendarSection({
                         onBulkMove(moves);
                       }
                     } catch (err) { console.error("bulk move parse failed", err); }
+                    // 벌크 이동이 끝나면 유령 마퀴가 남지 않도록 방어 클리어 —
+                    // HTML5 dragend 로 mouseup 이 억제되는 경우에 대비.
+                    setMarquee(null);
                     setDropTarget(null); setDragBlockId(null); return;
                   }
 
@@ -2354,6 +2451,7 @@ function CalendarSection({
                         pushUndo(() => onUpdateBlock(movedBlockId, prev));
                       }
                     }
+                    setMarquee(null);
                     setDropTarget(null); setDragBlockId(null); return;
                   }
 
@@ -2396,7 +2494,7 @@ function CalendarSection({
                   </div>
                 )}
 
-                {/* Drop ghost — template or block move */}
+                {/* Drop ghost — template or single block move (primary 만) */}
                 {isDropTarget && ghostStartMin !== null && (dragTemplate || dragBlock) && (() => {
                   const src = dragBlock ?? dragTemplate!;
                   const ghostDur = dragBlock ? (dragBlock.endH*60+dragBlock.endM) - (dragBlock.startH*60+dragBlock.startM) : 60;
@@ -2419,6 +2517,48 @@ function CalendarSection({
                       )}
                     </div>
                   );
+                })()}
+
+                {/* 다중 드래그 고스트 — primary 블록의 (dayDelta, minDelta) 로 selectedIds 각각의
+                     착지 위치를 계산해서 각 요일 컬럼에 그림. primary 자신은 위쪽 단일 고스트가
+                     이미 그리므로 여기선 primary 제외한 나머지만. */}
+                {dropTarget && dragBlockId && selectedIds.size > 1 && selectedIds.has(dragBlockId) && (() => {
+                  const primary = blocksRef.current.find(b => b.id === dragBlockId);
+                  if (!primary) return null;
+                  const primaryOrigStart = primary.startH * 60 + primary.startM;
+                  const primaryNewStart = dropTarget.startH * 60 + dropTarget.startM;
+                  const minDelta = primaryNewStart - primaryOrigStart;
+                  const primaryOrigDate = parseLocalDate(primary.date);
+                  const primaryTargetDateStr = days[dropTarget.dayIdx] ? toDateStr(days[dropTarget.dayIdx]) : null;
+                  if (!primaryTargetDateStr) return null;
+                  const dayDelta = Math.round((parseLocalDate(primaryTargetDateStr).getTime() - primaryOrigDate.getTime()) / 86400000);
+                  const ghosts: React.ReactNode[] = [];
+                  selectedIds.forEach(id => {
+                    if (id === dragBlockId) return; // primary 는 위에서 그림
+                    const b = blocksRef.current.find(x => x.id === id);
+                    if (!b) return;
+                    const bDate = parseLocalDate(b.date);
+                    bDate.setDate(bDate.getDate() + dayDelta);
+                    if (toDateStr(bDate) !== dateStr) return; // 이 컬럼에 안 떨어짐
+                    const bOrigStart = b.startH * 60 + b.startM;
+                    const bDur = (b.endH * 60 + b.endM) - bOrigStart;
+                    const bNewStart = Math.max(0, Math.min(TOTAL_H * 60 - bDur, bOrigStart + minDelta));
+                    const bNewEnd = bNewStart + bDur;
+                    const bTop = bNewStart / 60 * HOUR_H;
+                    const bH = Math.max(20, bDur / 60 * HOUR_H - 2);
+                    const bOverlap = hasOverlapForDate(dateStr, bNewStart, bNewEnd, id);
+                    ghosts.push(
+                      <div key={`gh-${id}`} className="absolute left-0.5 right-0.5 rounded-lg px-1.5 py-1 pointer-events-none border-2 border-dashed z-20"
+                        style={{ top: bTop, height: bH,
+                          backgroundColor: bOverlap ? "#ef444418" : b.color + "20",
+                          borderColor: bOverlap ? "#ef4444" : b.color }}>
+                        <div className="text-[10px] font-semibold truncate" style={{ color: bOverlap ? "#ef4444" : b.color }}>
+                          {bOverlap ? "⚠" : b.title}
+                        </div>
+                      </div>
+                    );
+                  });
+                  return <>{ghosts}</>;
                 })()}
 
                 {/* 습관 스태킹 연결선 — nextBlockId로 연결된 블록끼리, 둘 다 이 날짜 컬럼에
@@ -2473,7 +2613,7 @@ function CalendarSection({
                         // 유령 상태로 남아있는 것을 원천 차단.
                         setMarquee(null);
                       }}
-                      onDragEnd={() => { setDragBlockId(null); setDropTarget(null); }}
+                      onDragEnd={() => { setDragBlockId(null); setDropTarget(null); setMarquee(null); }}
                       onContextMenu={e => {
                         e.preventDefault();
                         // 선택되지 않은 블록을 우클릭하면 그 블록만 선택 상태로 두고 메뉴 노출.
@@ -2502,13 +2642,15 @@ function CalendarSection({
                       <div className="absolute top-0 left-0 right-0 h-2.5 cursor-n-resize z-20"
                         onMouseDown={e => { e.stopPropagation(); e.preventDefault();
                           setResizing({ blockId: block.id, edge: "top", startY: e.clientY, origStartMin: sMin, origEndMin: eMin, blockDate: block.date }); }} />
-                      <div className="px-1.5 pt-3 pb-2">
+                      {/* 텍스트 컨테이너를 세로 중앙 배치 — 리사이즈 핸들(위/아래 2.5px씩)을 피해서
+                           inset-y-2.5 로 채우고, flex column + justify-center 로 실제 텍스트를 중앙 정렬. */}
+                      <div className="absolute inset-x-0 inset-y-2.5 px-1.5 flex flex-col justify-center min-w-0">
                         <div className="text-[10px] font-semibold truncate flex items-center gap-1" style={{ color: block.color }}>
                           {block.repeatGroupId && <span title="반복 일정" style={{ fontSize: 9 }}>↻</span>}
-                          {block.title}
+                          <span className="truncate">{block.title}</span>
                         </div>
                         {height > 32 && (
-                          <div className="text-[9px] opacity-70 mt-0.5" style={{ color: block.color }}>
+                          <div className="text-[9px] opacity-70 mt-0.5 truncate" style={{ color: block.color }}>
                             {fmtTime(block.startH, block.startM)} – {fmtTime(block.endH, block.endM)}
                           </div>
                         )}
@@ -2570,31 +2712,18 @@ function CalendarSection({
             const isFuture = dateStr > TODAY_STR;
             const col = i % 7;
             const row = Math.floor(i / 7);
-            const dayBlocks = topLevelBlocks.filter(b => b.date === dateStr)
-              .sort((a,b) => a.startH*60+a.startM - (b.startH*60+b.startM));
             const dayDeadlines = deadlines.filter(d => d.dueDate === dateStr);
-            const MAX = 3;
-            const shown = dayBlocks.slice(0, MAX);
-            const overflow = dayBlocks.length - MAX;
+            // multi-day todo 는 date~endDate 범위 안에 있는 셀에도 표시.
+            const dayTodos = todos.filter(t => t.date === dateStr || (t.endDate && dateStr >= t.date && dateStr <= t.endDate));
+            const monthAddDraft = monthDrafts[dateStr] ?? "";
 
             return (
               <div key={dateStr}
                 className={`min-h-[100px] p-1.5 relative ${col!==6?"border-r border-border":""} ${row<totalRows-1?"border-b border-border":""} ${isToday?"ring-1 ring-inset ring-primary/40":""} ${isFuture?"bg-muted/5":""}`}
-                onDragOver={e => e.preventDefault()}
-                onDrop={e => {
-                  e.preventDefault();
-                  const tpl = templates.find(t => t.id === e.dataTransfer.getData("templateId"));
-                  if (!tpl) return;
-                  let startH = 9, startM = 0;
-                  for (let h = 9; h < 22; h++) {
-                    for (let m = 0; m < 60; m += 30) {
-                      if (!hasOverlapForDate(dateStr, h*60+m, h*60+m+60)) { startH=h; startM=m; h=99; break; }
-                    }
-                  }
-                  onAddBlock({ id:`b-${Date.now()}`, templateId: tpl.id, title:tpl.title, color:tpl.color,
-                    startH, startM, endH:startH+1, endM:startM,
-                    completed:false, tags:tpl.tags, memo:"", date:dateStr });
-                  setDragTplId(null);
+                onClick={e => {
+                  // 셀 배경 직접 클릭 → 새 todo 인라인 입력 오픈.
+                  if (e.target !== e.currentTarget) return;
+                  setMonthEditing(dateStr);
                 }}
               >
                 <div className="flex items-center justify-between mb-1">
@@ -2606,34 +2735,61 @@ function CalendarSection({
                     {day.getDate()}
                   </span>
                 </div>
-                {/* 마감(별도) — 블록보다 위에 표시 */}
+                {/* 마감(빨강, 최상단) */}
                 {dayDeadlines.length > 0 && (
                   <div className="space-y-0.5 mb-0.5">
                     {dayDeadlines.map(d => (
                       <div
                         key={d.id}
                         onClick={e => { e.stopPropagation(); onToggleDeadline(d.id); }}
-                        className={`flex items-center gap-1 px-1 py-0.5 rounded text-[9px] cursor-pointer transition-colors ${d.completed ? "bg-muted/40 text-muted-foreground line-through" : "bg-red-100 text-red-700 hover:bg-red-200"}`}
+                        className={`px-1 py-0.5 rounded text-[9px] cursor-pointer transition-colors ${d.completed ? "bg-muted/40 text-muted-foreground line-through" : "bg-red-100 text-red-700 hover:bg-red-200"}`}
                         title={d.completed ? "완료됨 — 다시 열기" : "완료 처리"}
                       >
-                        <Target size={8} className="flex-shrink-0" />
-                        <span className="truncate font-medium leading-tight">{d.title}</span>
+                        <span className="truncate font-medium leading-tight block">{d.title}</span>
                       </div>
                     ))}
                   </div>
                 )}
+                {/* Todo — 마감 아래 */}
                 <div className="space-y-0.5">
-                  {shown.map(block => (
-                    <div key={block.id} onClick={() => onSelect(block)}
-                      className="flex items-center gap-1 px-1 py-0.5 rounded text-[9px] cursor-pointer hover:brightness-95 transition-all"
-                      style={{ backgroundColor: block.color+"22", borderLeft:`2px solid ${block.color}` }}>
-                      <span className="truncate font-medium leading-tight" style={{ color: block.color }}>
-                        {fmtTime(block.startH,block.startM)} {block.title}
-                      </span>
+                  {dayTodos.map(t => (
+                    <div key={t.id}
+                      onClick={e => { e.stopPropagation(); onToggleTodo(t.id); }}
+                      className={`px-1 py-0.5 rounded text-[9px] cursor-pointer transition-colors bg-muted/30 hover:bg-muted ${t.completed ? "line-through text-muted-foreground" : ""}`}
+                      title={t.completed ? "완료 해제" : "완료 처리"}
+                    >
+                      <span className="truncate leading-tight block">{t.title}</span>
                     </div>
                   ))}
-                  {overflow > 0 && <div className="text-[9px] text-muted-foreground pl-1">+{overflow}개</div>}
                 </div>
+                {/* 새 todo 인라인 입력 — 셀 클릭으로 열리며 Enter/Escape/blur 로 확정/취소 */}
+                {monthEditing === dateStr && (
+                  <input
+                    autoFocus
+                    value={monthAddDraft}
+                    onChange={e => setMonthDrafts(d => ({ ...d, [dateStr]: e.target.value }))}
+                    onClick={e => e.stopPropagation()}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") {
+                        const v = (monthDrafts[dateStr] ?? "").trim();
+                        if (v) onAddTodo({ title: v, date: dateStr });
+                        setMonthDrafts(d => ({ ...d, [dateStr]: "" }));
+                        setMonthEditing(null);
+                      } else if (e.key === "Escape") {
+                        setMonthDrafts(d => ({ ...d, [dateStr]: "" }));
+                        setMonthEditing(null);
+                      }
+                    }}
+                    onBlur={() => {
+                      const v = (monthDrafts[dateStr] ?? "").trim();
+                      if (v) onAddTodo({ title: v, date: dateStr });
+                      setMonthDrafts(d => ({ ...d, [dateStr]: "" }));
+                      setMonthEditing(null);
+                    }}
+                    placeholder="새 일정"
+                    className="mt-1 w-full px-1 py-0.5 rounded text-[9px] bg-transparent border border-primary/40 outline-none placeholder:text-muted-foreground/60"
+                  />
+                )}
               </div>
             );
           })}
@@ -2669,7 +2825,6 @@ function CalendarSection({
                     className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer hover:shadow-sm transition-all ${d.completed ? "bg-card opacity-60" : "border-red-200 bg-red-50/40"}`}
                     onClick={() => onToggleDeadline(d.id)}
                   >
-                    <Target size={16} className={d.completed ? "text-muted-foreground" : "text-red-500"} />
                     <div className="flex-1 min-w-0">
                       <div className={`text-sm font-medium ${d.completed ? "line-through text-muted-foreground" : ""}`}>{d.title}</div>
                       <div className="text-[11px] text-muted-foreground">{d.dueDate}</div>
@@ -2719,9 +2874,9 @@ function CalendarSection({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0 bg-card/50">
-        <div className="flex items-center gap-3">
+      {/* Header — 3분할: 좌(뷰 세그먼트) · 중앙(날짜 라벨 양옆 chevron) · 우(리스트/그리드 + 콘텐츠 모드) */}
+      <div className="flex items-center px-5 py-3 border-b border-border flex-shrink-0 bg-card/50">
+        <div className="flex-1 flex items-center gap-3">
           <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5">
             {(["day","week","month"] as const).map(v => (
               <button key={v} onClick={() => setCalView(v)}
@@ -2731,7 +2886,13 @@ function CalendarSection({
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        {/* 중앙: 날짜 라벨 양 끝에 이전/다음 화살표를 붙여 그 자체가 네비게이션 컨트롤이 되도록. */}
+        <div className="flex items-center gap-0.5">
+          <button onClick={goPrev} className="p-1.5 rounded hover:bg-muted transition-colors" title="이전"><ChevronLeft size={15}/></button>
+          <span className="text-xs px-2 text-muted-foreground min-w-[180px] text-center">{headerLabel}</span>
+          <button onClick={goNext} className="p-1.5 rounded hover:bg-muted transition-colors" title="다음"><ChevronRight size={15}/></button>
+        </div>
+        <div className="flex-1 flex items-center gap-2 justify-end">
           {calView !== "month" && (
             <button onClick={() => setCalMode(calMode==="grid"?"list":"grid")}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-border bg-card hover:bg-muted transition-colors">
@@ -2739,11 +2900,20 @@ function CalendarSection({
               {calMode==="grid"?"리스트":"그리드"}
             </button>
           )}
-          <div className="flex items-center gap-0.5">
-            <button onClick={goPrev} className="p-1.5 rounded hover:bg-muted transition-colors"><ChevronLeft size={15}/></button>
-            <span className="text-xs px-2 text-muted-foreground min-w-[180px] text-center">{headerLabel}</span>
-            <button onClick={goNext} className="p-1.5 rounded hover:bg-muted transition-colors"><ChevronRight size={15}/></button>
-          </div>
+          {calView !== "month" && (
+            <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5" title="시간표 / 일정 / 둘 다">
+              {([
+                { v: "grid" as const, label: "시간" },
+                { v: "both" as const, label: "둘 다" },
+                { v: "todos" as const, label: "일정" },
+              ]).map(o => (
+                <button key={o.v} onClick={() => setContentView(o.v)}
+                  className={`px-2.5 py-1 text-[11px] rounded-md transition-all ${contentView===o.v?"bg-card shadow-sm font-medium":"text-muted-foreground hover:text-foreground"}`}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -2915,13 +3085,33 @@ function CalendarSection({
           )}
         </div>
 
-        {/* Content — switches by view */}
-        {calView === "month"
-          ? renderMonthGrid()
-          : calMode === "grid"
-          ? renderTimeGrid(viewDays)
-          : renderListView()
-        }
+        {/* Content — 뷰 종류(일/주/월) 와 콘텐츠 모드(시간 그리드/일정 리스트/둘 다) 조합.
+             month 는 시간 그리드가 없어 항상 월 그리드로 렌더. 일/주 는 contentView 에 따라 분할. */}
+        {calView === "month" ? (
+          renderMonthGrid()
+        ) : (
+          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+            {contentView !== "todos" && (
+              <div className={contentView === "both" ? "flex-[3] flex overflow-hidden min-h-0" : "flex-1 flex overflow-hidden min-h-0"}>
+                {calMode === "grid" ? renderTimeGrid(viewDays) : renderListView()}
+              </div>
+            )}
+            {contentView !== "grid" && (
+              <div className={contentView === "both" ? "flex-[2] border-t border-border overflow-hidden min-h-0" : "flex-1 overflow-hidden min-h-0"}>
+                <TodoPanel
+                  todos={todos}
+                  viewDays={viewDays}
+                  onAdd={onAddTodo}
+                  onToggle={onToggleTodo}
+                  onDelete={onDeleteTodo}
+                  onUpdateTitle={onUpdateTodoTitle}
+                  deadlines={deadlines}
+                  onToggleDeadline={onToggleDeadline}
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 다중 선택 상태에서 우클릭 시 뜨는 컨텍스트 메뉴 — 화면 절대 좌표 위치.
@@ -2930,15 +3120,15 @@ function CalendarSection({
       {ctxMenu && (
         <div
           onMouseDown={e => e.stopPropagation()}
-          className="fixed z-50 min-w-[180px] bg-card border border-border rounded-lg shadow-lg p-1 text-sm"
+          className="fixed z-50 min-w-[140px] bg-card border border-border rounded-md shadow-md p-0.5 text-[11px]"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
         >
-          <div className="px-2 py-1 text-[10px] text-muted-foreground uppercase tracking-wide">
+          <div className="px-2 py-0.5 text-[9px] text-muted-foreground uppercase tracking-wide">
             {selectedIds.size}개 블록
           </div>
           <button
             onClick={() => { setShowMultiRepeat(true); setCtxMenu(null); }}
-            className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-muted transition-colors flex items-center gap-2"
+            className="w-full text-left px-2 py-1 rounded hover:bg-muted transition-colors flex items-center gap-1.5"
           >↻ 반복 설정</button>
           <button
             onClick={() => {
@@ -2946,17 +3136,17 @@ function CalendarSection({
               if (picked.length > 0) setBlockClipboard(picked);
               setCtxMenu(null);
             }}
-            className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-muted transition-colors flex items-center gap-2"
-          ><Copy size={13} /> 복사 (Ctrl+C)</button>
+            className="w-full text-left px-2 py-1 rounded hover:bg-muted transition-colors flex items-center gap-1.5"
+          ><Copy size={11} /> 복사</button>
           <button
             onClick={() => {
               onPasteBlocks(blockClipboard, toDateStr(viewDate));
               setCtxMenu(null);
             }}
             disabled={blockClipboard.length === 0}
-            className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-muted transition-colors flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-transparent"
-          ><Plus size={13} /> 붙여넣기 (Ctrl+V)</button>
-          <div className="h-px bg-border my-1" />
+            className="w-full text-left px-2 py-1 rounded hover:bg-muted transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:hover:bg-transparent"
+          ><Plus size={11} /> 붙여넣기</button>
+          <div className="h-px bg-border my-0.5" />
           <button
             onClick={() => {
               const ids = Array.from(selectedIds);
@@ -2964,8 +3154,8 @@ function CalendarSection({
               setSelectedIds(new Set());
               setCtxMenu(null);
             }}
-            className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-2"
-          ><Trash2 size={13} /> 삭제</button>
+            className="w-full text-left px-2 py-1 rounded hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-1.5"
+          ><Trash2 size={11} /> 삭제</button>
         </div>
       )}
 
@@ -2988,6 +3178,102 @@ function CalendarSection({
 // 여러 블록에 한꺼번에 적용할 반복 규칙을 정의하는 미니 모달.
 // 기존 상세 패널 안 반복 UI 와 형태를 맞춰서 일관성 있게. 저장 시 각 블록에 대해
 // bulkSetRepeatForBlocks 로 setBlockRepeat 을 호출 — 블록별 반복 그룹이 각각 만들어짐.
+// 일/주 뷰 하단(또는 단독)에 뜨는 일정 리스트 패널. viewDays 안 각 날짜별로 컬럼을 만들고
+// 그 안에 마감 → todo 순으로 노출. 마감은 빨간 톤, todo 는 카드 스타일 체크박스. 새 todo 추가는
+// 각 컬럼 하단 입력창. 실시간 편집은 title 클릭 → inline input.
+function TodoPanel({
+  todos, viewDays, onAdd, onToggle, onDelete, onUpdateTitle, deadlines, onToggleDeadline,
+}: {
+  todos: Todo[];
+  viewDays: Date[];
+  onAdd: (t: { title: string; date: string; endDate?: string | null }) => void;
+  onToggle: (id: string) => void;
+  onDelete: (id: string) => void;
+  onUpdateTitle: (id: string, title: string) => void;
+  deadlines: Deadline[];
+  onToggleDeadline: (id: string) => void;
+}) {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingDraft, setEditingDraft] = useState("");
+  const commitDraft = (dateStr: string) => {
+    const v = (drafts[dateStr] ?? "").trim();
+    if (!v) return;
+    onAdd({ title: v, date: dateStr });
+    setDrafts(d => ({ ...d, [dateStr]: "" }));
+  };
+  return (
+    <div className="h-full flex overflow-hidden">
+      <div className="w-12 flex-shrink-0 flex items-start justify-end pt-2 pr-2 text-[9px] text-muted-foreground select-none">일정</div>
+      {viewDays.map((day) => {
+        const dateStr = toDateStr(day);
+        const dayDeadlines = deadlines.filter(d => d.dueDate === dateStr);
+        const dayTodos = todos.filter(t => t.date === dateStr || (t.endDate && dateStr >= t.date && dateStr <= t.endDate));
+        return (
+          <div key={dateStr} className="flex-1 border-l border-border overflow-y-auto min-w-0 p-2 space-y-1">
+            {/* 마감 먼저(상단·빨강) */}
+            {dayDeadlines.map(d => (
+              <button
+                key={`dl-${d.id}`}
+                onClick={() => onToggleDeadline(d.id)}
+                title={d.completed ? "완료 해제" : "완료 처리"}
+                className={`w-full text-left text-[11px] px-2 py-1 rounded transition-colors block truncate ${d.completed ? "bg-muted/40 text-muted-foreground line-through" : "bg-red-100 text-red-700 hover:bg-red-200"}`}
+              >{d.title}</button>
+            ))}
+            {/* Todo — 흰 카드 + 체크박스 + 인라인 편집 + 우측 삭제 */}
+            {dayTodos.map(t => (
+              <div key={t.id}
+                className={`group/todo flex items-center gap-2 px-2 py-1 rounded border bg-card text-[11px] hover:border-primary/40 ${t.completed ? "opacity-60" : ""}`}
+              >
+                <button
+                  onClick={() => onToggle(t.id)}
+                  className="flex-shrink-0"
+                  title={t.completed ? "완료 해제" : "완료 처리"}
+                >
+                  {t.completed
+                    ? <CheckCircle2 size={13} className="text-primary" />
+                    : <Circle size={13} className="text-muted-foreground" />}
+                </button>
+                {editingId === t.id ? (
+                  <input
+                    autoFocus
+                    value={editingDraft}
+                    onChange={e => setEditingDraft(e.target.value)}
+                    onBlur={() => { onUpdateTitle(t.id, editingDraft.trim() || t.title); setEditingId(null); }}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") { onUpdateTitle(t.id, editingDraft.trim() || t.title); setEditingId(null); }
+                      else if (e.key === "Escape") setEditingId(null);
+                    }}
+                    className="flex-1 min-w-0 bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-1"
+                  />
+                ) : (
+                  <button
+                    onClick={() => { setEditingDraft(t.title); setEditingId(t.id); }}
+                    className={`flex-1 min-w-0 text-left truncate ${t.completed ? "line-through" : ""}`}
+                  >{t.title}</button>
+                )}
+                <button
+                  onClick={() => onDelete(t.id)}
+                  className="opacity-0 group-hover/todo:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                  title="삭제"
+                ><X size={11} /></button>
+              </div>
+            ))}
+            {/* 새 todo 입력 */}
+            <input
+              value={drafts[dateStr] ?? ""}
+              onChange={e => setDrafts(d => ({ ...d, [dateStr]: e.target.value }))}
+              onKeyDown={e => { if (e.key === "Enter") commitDraft(dateStr); }}
+              placeholder="+ 새 일정"
+              className="w-full px-2 py-1 rounded text-[11px] bg-transparent border border-dashed border-border/60 hover:border-primary/40 focus:border-primary outline-none placeholder:text-muted-foreground/60"
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function MultiRepeatModal({
   count, onClose, onApply,
 }: {

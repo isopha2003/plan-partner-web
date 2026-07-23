@@ -279,6 +279,64 @@ export async function deleteDeadlineRow(id: string) {
   await db.execute("DELETE FROM deadlines WHERE id = ?", [id]);
 }
 
+// ── todos (날짜별 할 일 — 시간 없이 체크박스) ────────────────────
+export interface Todo {
+  id: string;
+  title: string;
+  date: string;
+  endDate: string | null;
+  completed: boolean;
+  sortOrder: number;
+}
+
+export async function fetchTodos(): Promise<Todo[]> {
+  const db = await getDb();
+  const rows = await db.select<any[]>("SELECT * FROM todos ORDER BY date, sort_order, created_at");
+  return rows.map(r => ({
+    id: r.id,
+    title: r.title ?? "",
+    date: r.date,
+    endDate: r.end_date ?? null,
+    completed: !!r.completed,
+    sortOrder: r.sort_order ?? 0,
+  }));
+}
+
+export async function createTodo(t: { title: string; date: string; endDate?: string | null }): Promise<Todo> {
+  const db = await getDb();
+  const id = uuid();
+  await db.execute(
+    "INSERT INTO todos (id, title, date, end_date, completed, sort_order) VALUES (?, ?, ?, ?, 0, 0)",
+    [id, t.title, t.date, t.endDate ?? null]
+  );
+  return { id, title: t.title, date: t.date, endDate: t.endDate ?? null, completed: false, sortOrder: 0 };
+}
+
+export async function updateTodo(id: string, changes: { title?: string; date?: string; endDate?: string | null }): Promise<void> {
+  const db = await getDb();
+  const sets: string[] = [];
+  const vals: any[] = [];
+  if (changes.title !== undefined) { sets.push("title = ?"); vals.push(changes.title); }
+  if (changes.date !== undefined) { sets.push("date = ?"); vals.push(changes.date); }
+  if (changes.endDate !== undefined) { sets.push("end_date = ?"); vals.push(changes.endDate ?? null); }
+  if (sets.length === 0) return;
+  vals.push(id);
+  await db.execute(`UPDATE todos SET ${sets.join(", ")} WHERE id = ?`, vals);
+}
+
+export async function toggleTodoRow(id: string, completed: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE todos SET completed = ?, completed_at = ? WHERE id = ?",
+    [completed ? 1 : 0, completed ? new Date().toISOString() : null, id]
+  );
+}
+
+export async function deleteTodoRow(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM todos WHERE id = ?", [id]);
+}
+
 // ── schedule_templates ─────────────────────────────────────────
 export async function fetchScheduleTemplates() {
   const db = await getDb();
