@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS todos (
   title TEXT NOT NULL DEFAULT '',
   date TEXT NOT NULL,
   end_date TEXT,
+  color TEXT NOT NULL DEFAULT '#5AA9E6',
   completed INTEGER NOT NULL DEFAULT 0,
   completed_at TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -144,6 +145,11 @@ const NOTE_UPGRADES = [
 // 기존 설치에서 block_templates 에 kind 컬럼을 사후 추가. 이미 있으면 조용히 실패.
 const BLOCK_TEMPLATE_UPGRADES = [
   "ALTER TABLE block_templates ADD COLUMN kind TEXT NOT NULL DEFAULT 'time'",
+];
+
+// todos 에 color 컬럼 사후 추가 — 시간 블록과 같은 스트라이프 UI 를 위해 색상 필요.
+const TODO_UPGRADES = [
+  "ALTER TABLE todos ADD COLUMN color TEXT NOT NULL DEFAULT '#5AA9E6'",
 ];
 
 let dbPromise: Promise<Database> | null = null;
@@ -183,6 +189,9 @@ export function getDb(): Promise<Database> {
         try { await db.execute(stmt); } catch { /* column/table already exists or not yet created */ }
       }
       for (const stmt of BLOCK_TEMPLATE_UPGRADES) {
+        try { await db.execute(stmt); } catch { /* column/table already exists or not yet created */ }
+      }
+      for (const stmt of TODO_UPGRADES) {
         try { await db.execute(stmt); } catch { /* column/table already exists or not yet created */ }
       }
       try {
