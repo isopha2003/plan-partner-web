@@ -2491,6 +2491,14 @@ function CalendarSection({
                 }}
                 onMouseLeave={() => setHoverSlot(prev => (prev?.dayIdx === di ? null : prev))}
                 onDragOver={e => {
+                  // 시간표에는 시간 템플릿(templateId) 이나 시간 블록 이동(blockId/blockIds) 만 허용.
+                  // 일정 템플릿(todoTemplateId) 이나 todo(todoId) 는 여기서 드랍 못 하게 preventDefault 스킵.
+                  const types = e.dataTransfer.types;
+                  if (
+                    !types.includes("templateId") &&
+                    !types.includes("blockId") &&
+                    !types.includes("blockIds")
+                  ) return;
                   e.preventDefault();
                   e.dataTransfer.dropEffect = dragBlockId ? "move" : "copy";
                   const rect = e.currentTarget.getBoundingClientRect();
@@ -3168,6 +3176,7 @@ function CalendarSection({
                         // 시간 그리드 드롭 로직이 templateId 를 소비하지 않도록 todoTemplateId 를 별도 키로 넘긴다.
                         e.dataTransfer.setData("todoTemplateId", t.id);
                         e.dataTransfer.setData("todoTitle", t.title);
+                        e.dataTransfer.effectAllowed = "copy";
                       }}
                       className="group/tpl flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent cursor-grab active:cursor-grabbing transition-colors text-xs select-none">
                       <span className="size-2.5 rounded-sm flex-shrink-0 bg-muted-foreground/40" />
@@ -3421,6 +3430,19 @@ function TodoPanel({
 }) {
   const [dragTodoId, setDragTodoId] = useState<string | null>(null);
   const [swapTargetId, setSwapTargetId] = useState<string | null>(null);
+  // 일정 템플릿 드래그 중 마우스가 hover 중인 컬럼(날짜) — 드랍 위치 프리뷰 강조용.
+  const [tplHoverDate, setTplHoverDate] = useState<string | null>(null);
+  // 사용자가 드래그를 컬럼 밖에서 놓거나 Esc 로 취소한 경우 tplHoverDate 가 stuck 되지 않도록
+  // 전역 dragend/drop 리스너로 안전망 클리어.
+  useEffect(() => {
+    const clear = () => setTplHoverDate(null);
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear);
+    return () => {
+      window.removeEventListener("dragend", clear);
+      window.removeEventListener("drop", clear);
+    };
+  }, []);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState("");
@@ -3485,16 +3507,22 @@ function TodoPanel({
             <div key={dateStr}
               onDragOver={e => {
                 // 일정 템플릿(todoTemplateId) 이나 기존 todo(todoId) 를 이 컬럼에 놓을 수 있게 허용.
-                if (
-                  e.dataTransfer.types.includes("todoTemplateId") ||
-                  e.dataTransfer.types.includes("todoTitle") ||
-                  e.dataTransfer.types.includes("todoId")
-                ) {
+                const types = e.dataTransfer.types;
+                const isTpl = types.includes("todoTemplateId") || types.includes("todoTitle");
+                const isTodo = types.includes("todoId");
+                if (isTpl || isTodo) {
                   e.preventDefault();
-                  e.dataTransfer.dropEffect = e.dataTransfer.types.includes("todoId") ? "move" : "copy";
+                  e.dataTransfer.dropEffect = isTodo ? "move" : "copy";
+                  if (isTpl) setTplHoverDate(dateStr);
+                }
+              }}
+              onDragLeave={e => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setTplHoverDate(prev => prev === dateStr ? null : prev);
                 }
               }}
               onDrop={e => {
+                setTplHoverDate(null);
                 const title = e.dataTransfer.getData("todoTitle");
                 if (title) {
                   e.preventDefault();
@@ -3509,7 +3537,9 @@ function TodoPanel({
                   onMoveTodo(todoId, { date: dateStr });
                 }
               }}
-              className="flex-1 border-l border-border min-w-0 p-2 space-y-1.5">
+              className={`flex-1 border-l border-border min-w-0 p-2 space-y-1.5 transition-colors ${
+                tplHoverDate === dateStr ? "bg-primary/5" : ""
+              }`}>
               {/* 마감 — 시간표 블록과 동일한 스트라이프 + 이름 배치. 빨강 계열. */}
               {dayDeadlines.map(d => (
                 <div key={`dl-${d.id}`}
@@ -3604,6 +3634,12 @@ function TodoPanel({
                   ><X size={11} /></button>
                 </div>
               ))}
+              {/* 일정 템플릿 드래그 hover 시 드랍 위치 프리뷰 — 시간 그리드의 hover ghost 와 톤 맞춤. */}
+              {tplHoverDate === dateStr && (
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border-2 border-dashed border-primary/50 bg-primary/5 text-[11px] text-primary">
+                  <Plus size={11} /> 여기에 새 할 일 추가
+                </div>
+              )}
               {/* 새 할 일 입력 */}
               <input
                 value={drafts[dateStr] ?? ""}
