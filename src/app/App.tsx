@@ -26,6 +26,7 @@ import { runAutoBackupIfNeeded, createBackupNow, getLastBackupTimestamp } from "
 import { checkForUpdate, installUpdate, type UpdateCheckResult } from "../lib/updater";
 import { notifyError } from "../lib/notify";
 import { Toaster } from "./components/ui/sonner";
+import { toast } from "sonner";
 import { emit, listen } from "@tauri-apps/api/event";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useTimerWindow } from "./useTimerWindow";
@@ -860,7 +861,7 @@ export default function App() {
     const target = parseLocalDate(targetDate);
     const offsetDays = Math.round((target.getTime() - earliest.getTime()) / 86400000);
 
-    const candidates: Block[] = source.map(b => {
+    const rawCandidates: Block[] = source.map(b => {
       const d = parseLocalDate(b.date);
       d.setDate(d.getDate() + offsetDays);
       return {
@@ -877,22 +878,54 @@ export default function App() {
       };
     });
 
-    // 겹침 필터 — 기존 블록 & 붙여넣기 중인 다른 블록끼리도 검사
+    // 겹치면 15분 단위로 아래로 밀어 빈 자리를 찾음. 그래도 하루 안에 안 맞으면
+    // 원래 시간에 그대로 넣음(silent skip 대신 겹쳐서라도 반영해 사용자가 드래그로 옮길 수 있게).
+    // 예전엔 조건 하나만 겹쳐도 후보 전체가 통째로 스킵돼서 "같은 슬롯에 복제" · "차 있는 요일에
+    // 붙여넣기" 가 아무 반응 없이 실패하던 문제.
     const current = blocksRefTop.current;
-    const allowed: Block[] = [];
-    for (const nb of candidates) {
-      const sMin = nb.startH * 60 + nb.startM;
-      const eMin = nb.endH * 60 + nb.endM;
-      const conflictsExisting = overlapsBlock(current, nb.date, sMin, eMin);
-      const conflictsSelf = allowed.some(a => a.date === nb.date &&
-        sMin < a.endH * 60 + a.endM && eMin > a.startH * 60 + a.startM);
-      if (!conflictsExisting && !conflictsSelf) allowed.push(nb);
+    const DAY_END_MIN = 24 * 60;
+    const placed: Block[] = [];
+    let shiftedCount = 0;
+    let overlappedCount = 0;
+    for (const nb of rawCandidates) {
+      const origS = nb.startH * 60 + nb.startM;
+      const dur = (nb.endH * 60 + nb.endM) - origS;
+      let s = origS;
+      let placedOk = false;
+      while (s + dur <= DAY_END_MIN) {
+        const e = s + dur;
+        const conflictsExisting = overlapsBlock(current, nb.date, s, e);
+        const conflictsSelf = placed.some(p => p.date === nb.date &&
+          s < p.endH * 60 + p.endM && e > p.startH * 60 + p.startM);
+        if (!conflictsExisting && !conflictsSelf) {
+          placed.push({
+            ...nb,
+            startH: Math.floor(s / 60), startM: s % 60,
+            endH: Math.floor(e / 60), endM: e % 60,
+          });
+          placedOk = true;
+          if (s !== origS) shiftedCount++;
+          break;
+        }
+        s += 15;
+      }
+      if (!placedOk) {
+        // 하루 안에 못 넣음 → 원래 시간에 겹쳐서라도 삽입
+        placed.push(nb);
+        overlappedCount++;
+      }
     }
-    if (allowed.length === 0) return;
+    if (placed.length === 0) return;
 
     try {
-      const real = await insertBlocksBulk(allowed);
+      const real = await insertBlocksBulk(placed);
       setBlocks(bs => [...bs, ...real]);
+      if (shiftedCount > 0 || overlappedCount > 0) {
+        const parts: string[] = [];
+        if (shiftedCount > 0) parts.push(`${shiftedCount}개 자동 이동`);
+        if (overlappedCount > 0) parts.push(`${overlappedCount}개 겹침`);
+        toast(`붙여넣기: ${parts.join(", ")}`);
+      }
       const ids = real.map(b => b.id);
       pushUndo(async () => {
         setBlocks(bs => bs.filter(b => !ids.includes(b.id)));
