@@ -1812,44 +1812,45 @@ function TodaySection({
           {`${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`}
         </div>
 
-        {/* Overdue deadlines — shown inline with warning */}
-        {overdueDeadlines.length > 0 && (
-          <div className="mb-4 p-3 rounded-xl border border-red-200 bg-red-50/50">
-            <div className="flex items-center gap-1.5 mb-2">
-              <AlertCircle size={12} className="text-red-500" />
-              <span className="text-[11px] font-semibold text-red-600 uppercase tracking-wide">지난 마감</span>
-            </div>
-            <div className="space-y-1.5">
-              {overdueDeadlines.map(d => {
-                const daysOver = Math.abs(daysBetween(parseLocalDate(d.dueDate), TODAY_DATE));
-                return (
-                  <div key={d.id} className="flex items-center gap-2.5">
-                    <button onClick={() => onToggleDeadline(d.id)}>
-                      <Circle size={16} className="text-red-400" />
-                    </button>
-                    <span className="text-sm flex-1 min-w-0 truncate">{d.title}</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">{daysOver}일 초과</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Today's deadlines — 캘린더의 마감 표시와 동일한 붉은 계열로 통일. */}
-        {todayDeadlines.length > 0 && (
-          <div className="mb-4 p-3 rounded-xl border border-red-200 bg-red-50/40">
-            <div className="space-y-1.5">
-              {todayDeadlines.map(d => (
-                <div key={d.id} className="flex items-center gap-2.5">
-                  <button onClick={() => onToggleDeadline(d.id)}>
-                    <Circle size={16} className="text-red-500" />
+        {/* 마감 — todo/시간 블록과 동일한 카드 + 원 + 스트라이프 형태. 색상은 빨강 고정.
+              지난 마감은 "N일 초과", 오늘 마감은 "D-0" 배지. */}
+        {(overdueDeadlines.length > 0 || todayDeadlines.length > 0) && (
+          <div className="mb-4 space-y-1.5">
+            {overdueDeadlines.map(d => {
+              const daysOver = Math.abs(daysBetween(parseLocalDate(d.dueDate), TODAY_DATE));
+              return (
+                <div key={d.id}
+                  className={`group/dl flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
+                    d.completed ? "bg-muted/40 border-transparent opacity-60" : "bg-card border-border hover:border-red-300"
+                  }`}
+                >
+                  <button onClick={() => onToggleDeadline(d.id)} className="flex-shrink-0">
+                    {d.completed
+                      ? <CheckCircle2 size={16} className="text-red-500" />
+                      : <Circle size={16} className="text-red-400" />}
                   </button>
-                  <span className="text-sm flex-1 min-w-0 truncate">{d.title}</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">D-0</span>
+                  <span className="w-0.5 h-6 rounded-full flex-shrink-0 bg-red-500" />
+                  <span className={`text-sm flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : ""}`}>{d.title}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">{daysOver}일 초과</span>
                 </div>
-              ))}
-            </div>
+              );
+            })}
+            {todayDeadlines.map(d => (
+              <div key={d.id}
+                className={`group/dl flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
+                  d.completed ? "bg-muted/40 border-transparent opacity-60" : "bg-card border-border hover:border-red-300"
+                }`}
+              >
+                <button onClick={() => onToggleDeadline(d.id)} className="flex-shrink-0">
+                  {d.completed
+                    ? <CheckCircle2 size={16} className="text-red-500" />
+                    : <Circle size={16} className="text-red-500" />}
+                </button>
+                <span className="w-0.5 h-6 rounded-full flex-shrink-0 bg-red-500" />
+                <span className={`text-sm flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : ""}`}>{d.title}</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">D-0</span>
+              </div>
+            ))}
           </div>
         )}
 
@@ -1975,13 +1976,6 @@ function TodaySection({
           </div>
         )}
 
-        {blocks.length > 0 && done === blocks.length && (
-          <div className="mt-10 text-center py-8">
-            <div className="text-3xl mb-3">🎉</div>
-            <div className="text-sm font-medium">오늘의 모든 계획을 완료했어요!</div>
-            <div className="text-xs text-muted-foreground mt-1">수고했어요. 활동 기록에 반영됐어요.</div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -3606,22 +3600,28 @@ function TodoPanel({
               className={`flex-1 border-l border-border min-w-0 p-2 space-y-1.5 transition-colors ${
                 tplHoverDate === dateStr ? "bg-primary/5" : ""
               }`}>
-              {/* 마감 — 시간표 블록과 동일한 스트라이프 + 이름 배치. 빨강 계열. */}
+              {/* 마감 — 시간 블록 / 할 일과 동일한 형태. 색상 배경(red+28) + 왼쪽 3px 스트라이프
+                    + 컬러 타이틀. hover 시 우측 상단에 완료 토글 아이콘. */}
               {dayDeadlines.map(d => (
                 <div key={`dl-${d.id}`}
-                  className={`group/dl flex items-center gap-2 px-2 py-1.5 rounded-md border text-[11px] transition-colors ${d.completed ? "bg-muted/40 border-transparent opacity-60" : "bg-red-50 border-red-200 hover:border-red-300"}`}
+                  className={`group/dl relative rounded-md overflow-hidden text-[11px] transition-all ${d.completed ? "opacity-60" : "hover:brightness-95"}`}
+                  style={{ backgroundColor: DEADLINE_COLOR + "28", borderLeft: `3px solid ${DEADLINE_COLOR}` }}
                 >
-                  <button
-                    onClick={() => onToggleDeadline(d.id)}
-                    className="flex-shrink-0"
-                    title={d.completed ? "완료 해제" : "완료 처리"}
-                  >
-                    {d.completed
-                      ? <CheckCircle2 size={13} className="text-red-500" />
-                      : <Circle size={13} className="text-red-400" />}
-                  </button>
-                  <span className="w-0.5 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: DEADLINE_COLOR }} />
-                  <span className={`flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : "text-red-700"}`}>{d.title}</span>
+                  <div
+                    className={`w-full min-w-0 truncate px-1.5 py-1 text-[10px] font-semibold ${d.completed ? "line-through" : ""}`}
+                    style={{ color: DEADLINE_COLOR }}
+                  >{d.title}</div>
+                  <div className="absolute top-0.5 right-0.5 flex items-center gap-0.5 opacity-0 group-hover/dl:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => onToggleDeadline(d.id)}
+                      className="size-4 rounded flex items-center justify-center hover:bg-black/10"
+                      title={d.completed ? "완료 해제" : "완료 처리"}
+                    >
+                      {d.completed
+                        ? <CheckCircle2 size={11} style={{ color: DEADLINE_COLOR }} />
+                        : <Circle size={11} style={{ color: DEADLINE_COLOR }} />}
+                    </button>
+                  </div>
                 </div>
               ))}
               {/* 할 일 — 시간 블록과 시각적으로 동일. 색상 배경(color+28) + 왼쪽 3px 스트라이프
