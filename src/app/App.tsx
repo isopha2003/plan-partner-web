@@ -3390,8 +3390,6 @@ function CalendarSection({
                   onToggle={onToggleTodo}
                   onDelete={onDeleteTodo}
                   onUpdateTitle={onUpdateTodoTitle}
-                  deadlines={deadlines}
-                  onToggleDeadline={onToggleDeadline}
                   showDayHeader={contentView === "todos"}
                   onGoPrev={goPrev}
                   onGoNext={goNext}
@@ -3473,7 +3471,7 @@ function CalendarSection({
 // 그 안에 마감 → todo 순으로 노출. 마감은 빨간 톤, todo 는 카드 스타일 체크박스. 새 todo 추가는
 // 각 컬럼 하단 입력창. 실시간 편집은 title 클릭 → inline input.
 function TodoPanel({
-  todos, viewDays, onAdd, onToggle, onDelete, onUpdateTitle, deadlines, onToggleDeadline,
+  todos, viewDays, onAdd, onToggle, onDelete, onUpdateTitle,
   showDayHeader, onGoPrev, onGoNext, onMoveTodo, onSwapTodo, onReorderTodos,
 }: {
   todos: Todo[];
@@ -3482,8 +3480,6 @@ function TodoPanel({
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
-  deadlines: Deadline[];
-  onToggleDeadline: (id: string) => void;
   showDayHeader?: boolean;
   onGoPrev?: () => void;
   onGoNext?: () => void;
@@ -3562,7 +3558,6 @@ function TodoPanel({
         <div className="w-12 flex-shrink-0 flex items-start justify-end pt-2 pr-2 text-[9px] text-muted-foreground select-none">일정</div>
         {viewDays.map((day) => {
           const dateStr = toDateStr(day);
-          const dayDeadlines = deadlines.filter(d => d.dueDate === dateStr);
           const dayTodos = todos
             .filter(t => t.date === dateStr || (t.endDate && dateStr >= t.date && dateStr <= t.endDate))
             .sort((a, b) => a.sortOrder - b.sortOrder);
@@ -3605,37 +3600,8 @@ function TodoPanel({
               className={`flex-1 border-l border-border min-w-0 p-2 space-y-1.5 transition-colors ${
                 tplHoverDate === dateStr ? "bg-primary/5" : ""
               }`}>
-              {/* 마감 — 시간 블록 / 할 일과 동일한 형태. 남은 일수에 따른 톤(색상 배경/스트라이프/타이틀)
-                    + D-day 배지. hover 시 우측 상단에 완료 토글 아이콘. */}
-              {dayDeadlines.map(d => {
-                const daysLeft = daysBetween(parseLocalDate(d.dueDate), TODAY_DATE);
-                const color = deadlineToneHex(daysLeft);
-                return (
-                  <div key={`dl-${d.id}`}
-                    className={`group/dl relative rounded-md overflow-hidden text-[11px] transition-all flex items-center gap-1 pr-1 ${d.completed ? "opacity-60" : "hover:brightness-95"}`}
-                    style={{ backgroundColor: color + "28", borderLeft: `3px solid ${color}` }}
-                  >
-                    <div
-                      className={`min-w-0 truncate px-1.5 py-1 text-[10px] font-semibold flex-1 ${d.completed ? "line-through" : ""}`}
-                      style={{ color }}
-                    >{d.title}</div>
-                    <span className="text-[9px] font-semibold leading-none flex-shrink-0 pr-5 group-hover/dl:pr-6 transition-[padding]" style={{ color }}>
-                      {formatDDay(daysLeft)}
-                    </span>
-                    <div className="absolute top-0.5 right-0.5 flex items-center gap-0.5 opacity-0 group-hover/dl:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => onToggleDeadline(d.id)}
-                        className="size-4 rounded flex items-center justify-center hover:bg-black/10"
-                        title={d.completed ? "완료 해제" : "완료 처리"}
-                      >
-                        {d.completed
-                          ? <CheckCircle2 size={11} style={{ color }} />
-                          : <Circle size={11} style={{ color }} />}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              {/* 마감은 여기(TodoPanel '일정' 컬럼) 에는 그리지 않음 — 시간 그리드 상단의
+                    고정 마감 행이 유일한 소스. 중복 표시 방지. */}
               {/* 할 일 — 시간 블록과 시각적으로 동일. 색상 배경(color+28) + 왼쪽 3px 스트라이프
                     + 컬러 타이틀 텍스트. hover 시 우측 상단에 완료 토글/삭제 아이콘.
                     본문 클릭으로 인라인 편집, 시간 블록과 마찬가지로 드래그로 이동/스왑. */}
