@@ -2639,7 +2639,7 @@ function CalendarSection({
                   document.addEventListener("mouseup", onUp);
                 }}
                 onMouseMove={e => {
-                  if (dragTplId || dragBlockId || resizing) return;
+                  if (dragTplId || dragBlockId || resizing || marquee) return;
                   const rect = e.currentTarget.getBoundingClientRect();
                   const zoom = getRootZoom();
                   const rawMin = Math.max(0, Math.min(TOTAL_H * 60 - 15, Math.round(((e.clientY - rect.top) / zoom / HOUR_H) * 60 / 15) * 15));
@@ -2748,7 +2748,7 @@ function CalendarSection({
 
                 {/* Hover ghost — 마우스 올린 15분 스냅 위치에 새 블록이 놓일 자리 미리보기.
                     이미 블록이 있는 시간대나 드래그·리사이즈 중일 땐 숨김. */}
-                {hoverSlot?.dayIdx === di && !isDropTarget && !dragBlockId && !dragTplId && !resizing
+                {hoverSlot?.dayIdx === di && !isDropTarget && !dragBlockId && !dragTplId && !resizing && !marquee
                   && !hasOverlapForDate(dateStr, hoverSlot.startMin, hoverSlot.startMin + 60) && (
                   <div
                     className="absolute left-0.5 right-0.5 rounded-lg pointer-events-none z-[6] bg-primary/5 ring-1 ring-primary/25"
