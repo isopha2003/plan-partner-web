@@ -277,31 +277,53 @@ export default function App() {
   // 이 블록의 제목이 처음 저장될 때 매칭 템플릿을 좌측 사이드바에 자동 추가하는 트리거로 씀.
   const [justCreatedBlockId, setJustCreatedBlockId] = useState<string | null>(null);
 
-  // 다중 블록 UX용 — 클립보드(Ctrl+C/V) 와 실행 취소 스택(Ctrl+Z).
+  // 다중 블록 UX용 — 클립보드(Ctrl+C/V), 실행 취소 스택(Ctrl+Z), 다시 실행 스택(Ctrl+Y).
   // 클립보드는 블록의 얕은 스냅샷: 원본과 무관한 새 블록으로 붙여넣기 위해 date/id 만 재계산.
-  // 실행 취소는 함수 스택(inverse op)이라 각 뮤테이션이 "복구 방법"을 만들어 push.
+  // 실행 취소는 { undo, redo } 쌍의 스택 — undo 를 실행하면 그 쌍이 redo 스택으로 넘어가고,
+  // 새 뮤테이션이 push 되면 redo 스택은 초기화(브랜치가 갈라졌으므로 앞선 redo 는 무의미).
+  // redo 를 제공하지 않은 레거시 pushUndo 호출은 redo 가 no-op — 취소만 되고 다시 실행은 없음.
+  type UndoEntry = { undo: () => Promise<void> | void; redo: () => Promise<void> | void };
   const [blockClipboard, setBlockClipboard] = useState<Block[]>([]);
-  const undoStackRef = useRef<Array<() => Promise<void> | void>>([]);
-  const pushUndo = (fn: () => Promise<void> | void) => {
-    undoStackRef.current.push(fn);
+  const undoStackRef = useRef<UndoEntry[]>([]);
+  const redoStackRef = useRef<UndoEntry[]>([]);
+  const pushUndo = (undo: () => Promise<void> | void, redo?: () => Promise<void> | void) => {
+    undoStackRef.current.push({ undo, redo: redo ?? (() => {}) });
     // 스택 무한 성장 방지 — 사용자가 세션 내 실수 되돌리기가 목적이라 30개면 충분.
     if (undoStackRef.current.length > 30) undoStackRef.current.shift();
+    redoStackRef.current.length = 0;
   };
   const runUndo = async () => {
-    const fn = undoStackRef.current.pop();
-    if (!fn) return;
-    try { await fn(); } catch (e) { notifyError("실행 취소 실패")(e); }
+    const entry = undoStackRef.current.pop();
+    if (!entry) return;
+    try {
+      await entry.undo();
+      redoStackRef.current.push(entry);
+      if (redoStackRef.current.length > 30) redoStackRef.current.shift();
+    } catch (e) { notifyError("실행 취소 실패")(e); }
   };
-  // 전역 Ctrl+Z — 입력 필드에서 타이핑 중이면 브라우저 기본 undo를 방해하지 않도록 스킵.
+  const runRedo = async () => {
+    const entry = redoStackRef.current.pop();
+    if (!entry) return;
+    try {
+      await entry.redo();
+      undoStackRef.current.push(entry);
+      if (undoStackRef.current.length > 30) undoStackRef.current.shift();
+    } catch (e) { notifyError("다시 실행 실패")(e); }
+  };
+  // 전역 Ctrl+Z (실행 취소) / Ctrl+Y · Ctrl+Shift+Z (다시 실행).
+  // 입력 필드에서 타이핑 중이면 브라우저 기본 undo/redo 를 방해하지 않도록 스킵.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
-      if (e.key.toLowerCase() !== "z") return;
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      const isUndo = key === "z" && !e.shiftKey;
+      const isRedo = key === "y" || (key === "z" && e.shiftKey);
+      if (!isUndo && !isRedo) return;
       const t = e.target as HTMLElement | null;
       const tag = t?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || (t as any)?.isContentEditable) return;
       e.preventDefault();
-      runUndo();
+      if (isUndo) runUndo(); else runRedo();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -861,7 +883,7 @@ export default function App() {
     const target = parseLocalDate(targetDate);
     const offsetDays = Math.round((target.getTime() - earliest.getTime()) / 86400000);
 
-    const rawCandidates: Block[] = source.map(b => {
+    const candidates: Block[] = source.map(b => {
       const d = parseLocalDate(b.date);
       d.setDate(d.getDate() + offsetDays);
       return {
@@ -878,59 +900,37 @@ export default function App() {
       };
     });
 
-    // 겹치면 15분 단위로 아래로 밀어 빈 자리를 찾음. 그래도 하루 안에 안 맞으면
-    // 원래 시간에 그대로 넣음(silent skip 대신 겹쳐서라도 반영해 사용자가 드래그로 옮길 수 있게).
-    // 예전엔 조건 하나만 겹쳐도 후보 전체가 통째로 스킵돼서 "같은 슬롯에 복제" · "차 있는 요일에
-    // 붙여넣기" 가 아무 반응 없이 실패하던 문제.
+    // 겹침이 있어도 자동 이동 없이 원래 시간 그대로 삽입 — 사용자가 드래그로 옮기게 함.
+    // 예전엔 겹치면 통째로 silent skip 이라 "같은 슬롯 복제" 나 "차 있는 요일 붙여넣기" 가
+    // 아무 반응 없이 실패했음. 이제 그냥 그대로 넣고 겹치는 개수만 토스트로 알림.
     const current = blocksRefTop.current;
-    const DAY_END_MIN = 24 * 60;
-    const placed: Block[] = [];
-    let shiftedCount = 0;
     let overlappedCount = 0;
-    for (const nb of rawCandidates) {
-      const origS = nb.startH * 60 + nb.startM;
-      const dur = (nb.endH * 60 + nb.endM) - origS;
-      let s = origS;
-      let placedOk = false;
-      while (s + dur <= DAY_END_MIN) {
-        const e = s + dur;
-        const conflictsExisting = overlapsBlock(current, nb.date, s, e);
-        const conflictsSelf = placed.some(p => p.date === nb.date &&
-          s < p.endH * 60 + p.endM && e > p.startH * 60 + p.startM);
-        if (!conflictsExisting && !conflictsSelf) {
-          placed.push({
-            ...nb,
-            startH: Math.floor(s / 60), startM: s % 60,
-            endH: Math.floor(e / 60), endM: e % 60,
-          });
-          placedOk = true;
-          if (s !== origS) shiftedCount++;
-          break;
-        }
-        s += 15;
-      }
-      if (!placedOk) {
-        // 하루 안에 못 넣음 → 원래 시간에 겹쳐서라도 삽입
-        placed.push(nb);
-        overlappedCount++;
-      }
+    for (const nb of candidates) {
+      const sMin = nb.startH * 60 + nb.startM;
+      const eMin = nb.endH * 60 + nb.endM;
+      const conflictsExisting = overlapsBlock(current, nb.date, sMin, eMin);
+      const conflictsSelf = candidates.some(a => a !== nb && a.date === nb.date &&
+        sMin < a.endH * 60 + a.endM && eMin > a.startH * 60 + a.startM);
+      if (conflictsExisting || conflictsSelf) overlappedCount++;
     }
-    if (placed.length === 0) return;
 
     try {
-      const real = await insertBlocksBulk(placed);
+      const real = await insertBlocksBulk(candidates);
       setBlocks(bs => [...bs, ...real]);
-      if (shiftedCount > 0 || overlappedCount > 0) {
-        const parts: string[] = [];
-        if (shiftedCount > 0) parts.push(`${shiftedCount}개 자동 이동`);
-        if (overlappedCount > 0) parts.push(`${overlappedCount}개 겹침`);
-        toast(`붙여넣기: ${parts.join(", ")}`);
-      }
+      if (overlappedCount > 0) toast(`붙여넣기: ${overlappedCount}개 겹침`);
       const ids = real.map(b => b.id);
-      pushUndo(async () => {
-        setBlocks(bs => bs.filter(b => !ids.includes(b.id)));
-        for (const id of ids) { try { await deleteBlockRow(id); } catch {} }
-      });
+      pushUndo(
+        async () => {
+          setBlocks(bs => bs.filter(b => !ids.includes(b.id)));
+          for (const id of ids) { try { await deleteBlockRow(id); } catch {} }
+        },
+        async () => {
+          try {
+            const restored = await insertBlocksBulk(real);
+            setBlocks(bs => [...bs, ...restored]);
+          } catch (e) { notifyError("붙여넣기 다시 실행 실패")(e); }
+        },
+      );
     } catch (e) { notifyError("붙여넣기 실패")(e); }
   };
 
