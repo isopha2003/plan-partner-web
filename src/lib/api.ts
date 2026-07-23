@@ -297,6 +297,7 @@ export interface Todo {
   color: string;
   completed: boolean;
   memo: string;
+  category: string;
   sortOrder: number;
 }
 
@@ -313,23 +314,25 @@ export async function fetchTodos(): Promise<Todo[]> {
     color: r.color ?? DEFAULT_TODO_COLOR,
     completed: !!r.completed,
     memo: r.memo ?? "",
+    category: r.category ?? "",
     sortOrder: r.sort_order ?? 0,
   }));
 }
 
-export async function createTodo(t: { title: string; date: string; endDate?: string | null; color?: string; memo?: string }): Promise<Todo> {
+export async function createTodo(t: { title: string; date: string; endDate?: string | null; color?: string; memo?: string; category?: string }): Promise<Todo> {
   const db = await getDb();
   const id = uuid();
   const color = t.color ?? DEFAULT_TODO_COLOR;
   const memo = t.memo ?? "";
+  const category = t.category ?? "";
   await db.execute(
-    "INSERT INTO todos (id, title, date, end_date, color, completed, memo, sort_order) VALUES (?, ?, ?, ?, ?, 0, ?, 0)",
-    [id, t.title, t.date, t.endDate ?? null, color, memo]
+    "INSERT INTO todos (id, title, date, end_date, color, completed, memo, category, sort_order) VALUES (?, ?, ?, ?, ?, 0, ?, ?, 0)",
+    [id, t.title, t.date, t.endDate ?? null, color, memo, category]
   );
-  return { id, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, memo, sortOrder: 0 };
+  return { id, title: t.title, date: t.date, endDate: t.endDate ?? null, color, completed: false, memo, category, sortOrder: 0 };
 }
 
-export async function updateTodo(id: string, changes: { title?: string; date?: string; endDate?: string | null; color?: string; memo?: string; sortOrder?: number }): Promise<void> {
+export async function updateTodo(id: string, changes: { title?: string; date?: string; endDate?: string | null; color?: string; memo?: string; category?: string; sortOrder?: number }): Promise<void> {
   const db = await getDb();
   const sets: string[] = [];
   const vals: any[] = [];
@@ -338,6 +341,7 @@ export async function updateTodo(id: string, changes: { title?: string; date?: s
   if (changes.endDate !== undefined) { sets.push("end_date = ?"); vals.push(changes.endDate ?? null); }
   if (changes.color !== undefined) { sets.push("color = ?"); vals.push(changes.color); }
   if (changes.memo !== undefined) { sets.push("memo = ?"); vals.push(changes.memo); }
+  if (changes.category !== undefined) { sets.push("category = ?"); vals.push(changes.category); }
   if (changes.sortOrder !== undefined) { sets.push("sort_order = ?"); vals.push(changes.sortOrder); }
   if (sets.length === 0) return;
   vals.push(id);
