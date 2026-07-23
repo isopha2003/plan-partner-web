@@ -3086,7 +3086,14 @@ function CalendarSection({
                   <div className="text-[10px] font-medium text-muted-foreground px-2 py-1 uppercase tracking-wide">시간 템플릿</div>
                   {templates.filter(t => t.kind !== "todo").map(t => (
                     <div key={t.id} draggable
-                      onDragStart={e => { e.dataTransfer.setData("templateId", t.id); setDragTplId(t.id); }}
+                      onDragStart={e => {
+                        e.dataTransfer.setData("templateId", t.id);
+                        // 스크롤 컨테이너/트랜지션 중 Chromium 기본 드래그 이미지가 마우스와 어긋나는 문제 방지 —
+                        // 클릭 지점을 앵커로 명시.
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        e.dataTransfer.setDragImage(e.currentTarget, e.clientX - rect.left, e.clientY - rect.top);
+                        setDragTplId(t.id);
+                      }}
                       onDragEnd={() => { setDragTplId(null); setDropTarget(null); }}
                       className="group/tpl flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent cursor-grab active:cursor-grabbing transition-colors text-xs select-none">
                       <span className="size-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: t.color }} />
@@ -3197,6 +3204,8 @@ function CalendarSection({
                         e.dataTransfer.setData("todoTitle", t.title);
                         e.dataTransfer.setData("todoColor", t.color);
                         e.dataTransfer.effectAllowed = "copy";
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        e.dataTransfer.setDragImage(e.currentTarget, e.clientX - rect.left, e.clientY - rect.top);
                       }}
                       className="group/tpl flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent cursor-grab active:cursor-grabbing transition-colors text-xs select-none">
                       <span className="size-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: t.color }} />
