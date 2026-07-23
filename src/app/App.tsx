@@ -2220,7 +2220,7 @@ function CalendarSection({
       } else if (key === "v" && !e.shiftKey) {
         if (blockClipboard.length === 0) return;
         e.preventDefault();
-        // 붙여넣기 대상 날짜: 일 뷰면 viewDate, 주 뷰면 viewDate 가 속한 주의 월요일(getWeekDays 참고).
+        // 붙여넣기 대상 날짜: 일 뷰면 viewDate, 주 뷰면 viewDate 가 속한 주의 일요일(getWeekDays 참고).
         // 사용자가 명시적으로 어느 셀에 놓고 싶으면 붙여넣기 후 드래그로 옮기면 됨.
         onPasteBlocks(blockClipboard, toDateStr(viewDateRef.current));
       }
@@ -2304,9 +2304,9 @@ function CalendarSection({
 
   const getWeekDays = (date: Date) => {
     const dow = date.getDay();
-    const mon = new Date(date);
-    mon.setDate(date.getDate() - (dow === 0 ? 6 : dow - 1));
-    return Array.from({ length: 7 }, (_, i) => { const d = new Date(mon); d.setDate(mon.getDate() + i); return d; });
+    const sun = new Date(date);
+    sun.setDate(date.getDate() - dow);
+    return Array.from({ length: 7 }, (_, i) => { const d = new Date(sun); d.setDate(sun.getDate() + i); return d; });
   };
 
   const viewDays = calView === "day" ? [viewDate] : getWeekDays(viewDate);
