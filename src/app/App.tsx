@@ -178,6 +178,20 @@ const sortTodosByCategory = <T extends { category?: string; sortOrder: number }>
     return cmp !== 0 ? cmp : a.sortOrder - b.sortOrder;
   });
 
+// 카테고리별로 묶어 [{ category, todos }] 배열로 반환 — UI가 그룹 헤더 + 구분선을 그릴 수 있게.
+// 미분류(빈 문자열)는 마지막 그룹이 됨.
+const groupTodosByCategory = <T extends { category?: string; sortOrder: number }>(list: T[]): { category: string; todos: T[] }[] => {
+  const sorted = sortTodosByCategory(list);
+  const groups: { category: string; todos: T[] }[] = [];
+  for (const t of sorted) {
+    const cat = (t.category ?? "").trim();
+    const last = groups[groups.length - 1];
+    if (last && last.category === cat) last.todos.push(t);
+    else groups.push({ category: cat, todos: [t] });
+  }
+  return groups;
+};
+
 // 두 음(A5→E6) 상승 chime — Web Audio로 코드에서 직접 생성해 파일/OS 사운드 설정에
 // 의존하지 않고 확실히 재생. 사용자 클릭으로 뽀모도로가 시작된 뒤에만 호출되므로
 // autoplay 정책에 걸리지 않음.
@@ -1847,7 +1861,7 @@ function TodaySection({
   const [dragTodoId, setDragTodoId] = useState<string | null>(null);
   const [swapTargetId, setSwapTargetId] = useState<string | null>(null);
   // sort_order 기준 정렬 — 시간표 뷰의 순서와 일관되게 유지. 같은 sort_order 는 created_at 순.
-  const sortedTodos = sortTodosByCategory(todos);
+  const todoGroups = groupTodosByCategory(todos);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -1920,66 +1934,79 @@ function TodaySection({
         )}
 
         {/* Todos — 마감과 시간 블록 사이. 시간표 블록과 동일한 스트라이프+체크박스 디자인.
-              드래그로 서로 자리를 교체할 수 있고, 시간대는 지정하지 않음. */}
+              드래그로 서로 자리를 교체할 수 있고, 시간대는 지정하지 않음.
+              카테고리별로 그룹을 나눠 헤더 + 그룹 하단에 구분선을 그림. */}
         <div className="mb-4">
           <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">오늘 일정</div>
-          <div className="space-y-1.5">
-            {sortedTodos.map(t => (
-              <div key={t.id}
-                draggable={!!onSwapTodo}
-                onDragStart={e => {
-                  if (!onSwapTodo) return;
-                  e.dataTransfer.setData("todoId", t.id);
-                  e.dataTransfer.effectAllowed = "move";
-                  setDragTodoId(t.id);
-                }}
-                onDragEnd={() => { setDragTodoId(null); setSwapTargetId(null); }}
-                onDragOver={e => {
-                  if (!onSwapTodo || !dragTodoId || dragTodoId === t.id) return;
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  setSwapTargetId(t.id);
-                }}
-                onDragLeave={() => { setSwapTargetId(prev => prev === t.id ? null : prev); }}
-                onDrop={e => {
-                  if (!onSwapTodo) return;
-                  const otherId = e.dataTransfer.getData("todoId");
-                  if (!otherId || otherId === t.id) return;
-                  e.preventDefault();
-                  onSwapTodo(otherId, t.id);
-                  setDragTodoId(null); setSwapTargetId(null);
-                }}
-                onClick={() => onSelectTodo?.(t)}
-                className={`group/todo flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
-                  onSelectTodo ? "cursor-pointer" : onSwapTodo ? "cursor-grab active:cursor-grabbing" : ""
-                } ${
-                  t.completed ? "bg-muted/40 border-transparent opacity-60"
-                    : swapTargetId === t.id ? "bg-primary/10 border-primary ring-1 ring-primary/40"
-                    : dragTodoId === t.id ? "bg-card border-primary/40 opacity-50"
-                    : "bg-card border-border hover:border-primary/40"
-                }`}
-              >
-                <button onClick={e => { e.stopPropagation(); onToggleTodo(t.id); }} className="flex-shrink-0 mt-0.5">
-                  {t.completed
-                    ? <CheckCircle2 size={16} style={{ color: t.color }} />
-                    : <Circle size={16} className="text-muted-foreground" />}
-                </button>
-                <span className="w-0.5 self-stretch rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} />
-                <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-                  {t.category && (
-                    <span
-                      className="self-start text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded"
-                      style={{ color: t.color, backgroundColor: t.color + "20" }}
-                    >{t.category}</span>
-                  )}
-                  <span className={`text-sm min-w-0 truncate ${t.completed ? "line-through text-muted-foreground" : ""}`}>{t.title}</span>
-                  {t.memo && (
-                    <span className="text-[11px] text-muted-foreground line-clamp-2 whitespace-pre-wrap break-words">{t.memo}</span>
-                  )}
+          <div className="space-y-2">
+            {todoGroups.map((group, gi) => (
+              <div key={group.category || "__none__"} className="space-y-1.5">
+                <div className="flex items-center gap-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                  <span>{group.category || "미분류"}</span>
+                  <div className="flex-1 h-px bg-border/60" />
                 </div>
-                <button onClick={e => { e.stopPropagation(); onDeleteTodo(t.id); }}
-                  className="opacity-0 group-hover/todo:opacity-100 text-muted-foreground hover:text-destructive transition-opacity mt-0.5"
-                ><X size={13} /></button>
+                {group.todos.map(t => (
+                  <div key={t.id}
+                    draggable={!!onSwapTodo}
+                    onDragStart={e => {
+                      if (!onSwapTodo) return;
+                      e.dataTransfer.setData("todoId", t.id);
+                      e.dataTransfer.effectAllowed = "move";
+                      setDragTodoId(t.id);
+                    }}
+                    onDragEnd={() => { setDragTodoId(null); setSwapTargetId(null); }}
+                    onDragOver={e => {
+                      if (!onSwapTodo || !dragTodoId || dragTodoId === t.id) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setSwapTargetId(t.id);
+                    }}
+                    onDragLeave={() => { setSwapTargetId(prev => prev === t.id ? null : prev); }}
+                    onDrop={e => {
+                      if (!onSwapTodo) return;
+                      const otherId = e.dataTransfer.getData("todoId");
+                      if (!otherId || otherId === t.id) return;
+                      e.preventDefault();
+                      onSwapTodo(otherId, t.id);
+                      setDragTodoId(null); setSwapTargetId(null);
+                    }}
+                    onClick={() => onSelectTodo?.(t)}
+                    className={`group/todo flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
+                      onSelectTodo ? "cursor-pointer" : onSwapTodo ? "cursor-grab active:cursor-grabbing" : ""
+                    } ${
+                      t.completed ? "bg-muted/40 border-transparent opacity-60"
+                        : swapTargetId === t.id ? "bg-primary/10 border-primary ring-1 ring-primary/40"
+                        : dragTodoId === t.id ? "bg-card border-primary/40 opacity-50"
+                        : "bg-card border-border hover:border-primary/40"
+                    }`}
+                  >
+                    <button onClick={e => { e.stopPropagation(); onToggleTodo(t.id); }} className="flex-shrink-0 mt-0.5">
+                      {t.completed
+                        ? <CheckCircle2 size={16} style={{ color: t.color }} />
+                        : <Circle size={16} className="text-muted-foreground" />}
+                    </button>
+                    <span className="w-0.5 self-stretch rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} />
+                    <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                      {/* 제목 옆에 카테고리(있으면) 를 인라인 뱃지로. 헤더가 있어도 시각적 강조를 위해 표시. */}
+                      <div className="flex items-baseline gap-1.5 min-w-0">
+                        <span className={`text-sm min-w-0 truncate ${t.completed ? "line-through text-muted-foreground" : ""}`}>{t.title}</span>
+                        {t.category && (
+                          <span
+                            className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded flex-shrink-0"
+                            style={{ color: t.color, backgroundColor: t.color + "20" }}
+                          >{t.category}</span>
+                        )}
+                      </div>
+                      {t.memo && (
+                        <span className="text-[11px] text-muted-foreground line-clamp-2 whitespace-pre-wrap break-words">{t.memo}</span>
+                      )}
+                    </div>
+                    <button onClick={e => { e.stopPropagation(); onDeleteTodo(t.id); }}
+                      className="opacity-0 group-hover/todo:opacity-100 text-muted-foreground hover:text-destructive transition-opacity mt-0.5"
+                    ><X size={13} /></button>
+                  </div>
+                ))}
+                {gi < todoGroups.length - 1 && <div className="h-px bg-border/40" />}
               </div>
             ))}
             <input
@@ -3697,7 +3724,7 @@ function TodoPanel({
         <div className="w-12 flex-shrink-0 flex items-start justify-end pt-2 pr-2 text-[9px] text-muted-foreground select-none">일정</div>
         {viewDays.map((day) => {
           const dateStr = toDateStr(day);
-          const dayTodos = sortTodosByCategory(
+          const dayTodoGroups = groupTodosByCategory(
             todos.filter(t => t.date === dateStr || (t.endDate && dateStr >= t.date && dateStr <= t.endDate))
           );
           return (
@@ -3741,10 +3768,15 @@ function TodoPanel({
               }`}>
               {/* 마감은 여기(TodoPanel '일정' 컬럼) 에는 그리지 않음 — 시간 그리드 상단의
                     고정 마감 행이 유일한 소스. 중복 표시 방지. */}
-              {/* 할 일 — 시간 블록과 시각적으로 동일. 색상 배경(color+28) + 왼쪽 3px 스트라이프
-                    + 컬러 타이틀 텍스트. hover 시 우측 상단에 완료 토글/삭제 아이콘.
-                    본문 클릭으로 인라인 편집, 시간 블록과 마찬가지로 드래그로 이동/스왑. */}
-              {dayTodos.map(t => (
+              {/* 할 일 — 카테고리별 그룹핑. 각 그룹 상단에 헤더(카테고리명 + 라인),
+                    그룹 사이엔 얇은 구분선. 시간 블록과 시각적으로 동일한 색상 스트라이프. */}
+              {dayTodoGroups.map((group, gi) => (
+              <React.Fragment key={group.category || "__none__"}>
+                <div className="flex items-center gap-1.5 pt-0.5 text-[9px] font-semibold text-muted-foreground uppercase tracking-wide">
+                  <span className="truncate">{group.category || "미분류"}</span>
+                  <div className="flex-1 h-px bg-border/60" />
+                </div>
+                {group.todos.map(t => (
                 <div key={t.id}
                   draggable={!!onMoveTodo && editingId !== t.id}
                   onDragStart={e => {
@@ -3799,7 +3831,7 @@ function TodoPanel({
                     />
                   ) : (
                     /* 클릭 → 상세 패널(시간 블록과 동일). 인라인 제목 편집이 필요하면 더블클릭.
-                       카테고리는 상단에 작은 태그, 메모는 title 아래에 최대 2줄 프리뷰. */
+                       카테고리는 제목 옆에 소형 뱃지, 메모는 title 아래에 최대 2줄 프리뷰. */
                     <button
                       onClick={() => {
                         if (onSelectTodo) onSelectTodo(t);
@@ -3809,16 +3841,18 @@ function TodoPanel({
                       className="w-full min-w-0 text-left px-1.5 py-1 flex flex-col gap-0.5"
                       title="클릭: 상세 열기 · 더블클릭: 제목 편집"
                     >
-                      {t.category && (
+                      <div className="flex items-baseline gap-1 min-w-0">
                         <span
-                          className="self-start text-[8px] font-semibold uppercase tracking-wide px-1 rounded-sm"
-                          style={{ color: t.color, backgroundColor: t.color + "30" }}
-                        >{t.category}</span>
-                      )}
-                      <span
-                        className={`min-w-0 truncate text-[10px] font-semibold ${t.completed ? "line-through" : ""}`}
-                        style={{ color: t.color }}
-                      >{t.title}</span>
+                          className={`min-w-0 truncate text-[10px] font-semibold ${t.completed ? "line-through" : ""}`}
+                          style={{ color: t.color }}
+                        >{t.title}</span>
+                        {t.category && (
+                          <span
+                            className="text-[8px] font-semibold uppercase tracking-wide px-1 rounded-sm flex-shrink-0"
+                            style={{ color: t.color, backgroundColor: t.color + "30" }}
+                          >{t.category}</span>
+                        )}
+                      </div>
                       {t.memo && (
                         <span
                           className="text-[9px] leading-tight opacity-70 line-clamp-2 whitespace-pre-wrap break-words"
@@ -3845,6 +3879,9 @@ function TodoPanel({
                     ><X size={11} style={{ color: t.color }} /></button>
                   </div>
                 </div>
+                ))}
+                {gi < dayTodoGroups.length - 1 && <div className="h-px bg-border/40 my-0.5" />}
+              </React.Fragment>
               ))}
               {/* 일정 템플릿 드래그 hover 시 드랍 위치 프리뷰 — 시간 그리드의 hover ghost 와 톤 맞춤. */}
               {tplHoverDate === dateStr && (
