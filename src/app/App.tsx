@@ -3969,23 +3969,34 @@ function DeadlinesSection({
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">{overdue.length}</span>
             </div>
             <div className="space-y-2">
-              {overdue.map(d => (
-                <div key={d.id} className="group/dl flex items-center gap-4 px-4 py-3.5 rounded-xl border border-red-200 bg-red-50/40">
-                  <button onClick={() => onToggle(d.id)}><Circle size={18} className="text-red-400" /></button>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium">{d.title}</div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5" >{d.dueDate}</div>
+              {overdue.map(d => {
+                const dl = daysLeft(d.dueDate);
+                const color = deadlineToneHex(dl);
+                return (
+                  <div
+                    key={d.id}
+                    className="group/dl flex items-center gap-4 px-4 py-3.5 rounded-xl border"
+                    style={{ backgroundColor: color + "18", borderColor: color + "55" }}
+                  >
+                    <button onClick={() => onToggle(d.id)}><Circle size={18} style={{ color }} /></button>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">{d.title}</div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">{d.dueDate}</div>
+                    </div>
+                    <span
+                      className="text-[11px] px-2.5 py-1 rounded-full font-medium flex-shrink-0"
+                      style={{ backgroundColor: color + "22", color }}
+                    >
+                      {formatDDay(dl)}
+                    </span>
+                    <button
+                      onClick={() => onDelete(d.id)}
+                      title="삭제"
+                      className="opacity-0 group-hover/dl:opacity-100 transition-opacity p-1 text-muted-foreground hover:text-destructive flex-shrink-0"
+                    ><Trash2 size={14} /></button>
                   </div>
-                  <span className="text-[11px] px-2.5 py-1 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">
-                    {Math.abs(daysLeft(d.dueDate))}일 초과
-                  </span>
-                  <button
-                    onClick={() => onDelete(d.id)}
-                    title="삭제"
-                    className="opacity-0 group-hover/dl:opacity-100 transition-opacity p-1 text-muted-foreground hover:text-destructive flex-shrink-0"
-                  ><Trash2 size={14} /></button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -3998,15 +4009,23 @@ function DeadlinesSection({
           <div className="space-y-2">
             {upcoming.map(d => {
               const dl = daysLeft(d.dueDate);
+              const color = deadlineToneHex(dl);
               return (
-                <div key={d.id} className="group/dl flex items-center gap-4 px-4 py-3.5 rounded-xl border bg-card">
-                  <button onClick={() => onToggle(d.id)}><Circle size={18} className="text-muted-foreground" /></button>
+                <div
+                  key={d.id}
+                  className="group/dl flex items-center gap-4 px-4 py-3.5 rounded-xl border"
+                  style={{ backgroundColor: color + "18", borderColor: color + "55" }}
+                >
+                  <button onClick={() => onToggle(d.id)}><Circle size={18} style={{ color }} /></button>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium">{d.title}</div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5" >{d.dueDate}</div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">{d.dueDate}</div>
                   </div>
-                  <span className={`text-[11px] px-2.5 py-1 rounded-full font-medium flex-shrink-0 ${dl <= 3 ? "bg-amber-100 text-amber-700" : "bg-muted text-muted-foreground"}`}>
-                    D-{dl}
+                  <span
+                    className="text-[11px] px-2.5 py-1 rounded-full font-medium flex-shrink-0"
+                    style={{ backgroundColor: color + "22", color }}
+                  >
+                    {formatDDay(dl)}
                   </span>
                   <button
                     onClick={() => onDelete(d.id)}
