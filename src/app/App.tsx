@@ -121,6 +121,35 @@ const daysBetween = (a: Date, b: Date) => {
   const bUTC = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
   return Math.round((aUTC - bUTC) / 86400000);
 };
+// 마감까지 남은 일수(daysLeft) 기반 시각 톤 — D-day 배지·좌측 스트라이프·카드 배경/보더를
+// 한꺼번에 결정. >10일 초록, 6~10일 노랑, 4~5일 주황, ≤3일(오늘·지난 마감 포함) 빨강.
+// 아래 클래스 문자열은 리터럴이라 Tailwind v4 소스 스캐너가 그대로 감지함.
+type DeadlineTone = {
+  stripe: string; badge: string; hoverBorder: string;
+  circle: string; circleHollow: string; bg: string; border: string;
+};
+const deadlineTone = (daysLeft: number): DeadlineTone => {
+  if (daysLeft > 10) return {
+    stripe: "bg-emerald-500", badge: "bg-emerald-100 text-emerald-700",
+    hoverBorder: "hover:border-emerald-300", circle: "text-emerald-500",
+    circleHollow: "text-emerald-400", bg: "bg-emerald-50", border: "border-emerald-200",
+  };
+  if (daysLeft > 5) return {
+    stripe: "bg-yellow-500", badge: "bg-yellow-100 text-yellow-700",
+    hoverBorder: "hover:border-yellow-300", circle: "text-yellow-500",
+    circleHollow: "text-yellow-400", bg: "bg-yellow-50", border: "border-yellow-200",
+  };
+  if (daysLeft > 3) return {
+    stripe: "bg-orange-500", badge: "bg-orange-100 text-orange-700",
+    hoverBorder: "hover:border-orange-300", circle: "text-orange-500",
+    circleHollow: "text-orange-400", bg: "bg-orange-50", border: "border-orange-200",
+  };
+  return {
+    stripe: "bg-red-500", badge: "bg-red-100 text-red-700",
+    hoverBorder: "hover:border-red-300", circle: "text-red-500",
+    circleHollow: "text-red-400", bg: "bg-red-50", border: "border-red-200",
+  };
+};
 // 자정 롤오버: 아래 세 값은 컴포넌트들이 프op이 아니라 모듈 전역 변수로 직접 참조하고 있어서
 // (예: TodaySection 안에서 `TODAY_STR` 그대로 사용), `let`로 두고 재할당하면 다음 렌더링부터
 // 모든 곳에서 자동으로 새 값을 읽게 됨. 실제로 리렌더를 발생시키는 건 App()의 tick 로직.
@@ -1796,7 +1825,11 @@ function TodaySection({
   const sorted = [...blocks].sort((a, b) => a.startH * 60 + a.startM - (b.startH * 60 + b.startM));
   const done = blocks.filter(b => b.completed).length;
   const overdueDeadlines = deadlines.filter(d => d.dueDate < TODAY_STR);
-  const todayDeadlines = deadlines.filter(d => d.dueDate === TODAY_STR);
+  // 오늘 마감 + 앞으로 남은 마감을 하나의 "이번 주 마감 일정" 섹션에 묶어 D-day 배지·톤으로
+  // 급함 정도를 시각화. dueDate 오름차순으로 정렬해 가장 임박한 것부터.
+  const upcomingDeadlines = deadlines
+    .filter(d => d.dueDate >= TODAY_STR)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   const [todoDraft, setTodoDraft] = useState("");
   const [dragTodoId, setDragTodoId] = useState<string | null>(null);
   const [swapTargetId, setSwapTargetId] = useState<string | null>(null);
@@ -1812,45 +1845,64 @@ function TodaySection({
           {`${TODAY_DATE.getFullYear()}년 ${TODAY_DATE.getMonth() + 1}월 ${TODAY_DATE.getDate()}일 ${DAYS_KO[TODAY_DATE.getDay()]}요일`}
         </div>
 
-        {/* 마감 — todo/시간 블록과 동일한 카드 + 원 + 스트라이프 형태. 색상은 빨강 고정.
-              지난 마감은 "N일 초과", 오늘 마감은 "D-0" 배지. */}
-        {(overdueDeadlines.length > 0 || todayDeadlines.length > 0) && (
-          <div className="mb-4 space-y-1.5">
-            {overdueDeadlines.map(d => {
-              const daysOver = Math.abs(daysBetween(parseLocalDate(d.dueDate), TODAY_DATE));
-              return (
-                <div key={d.id}
-                  className={`group/dl flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
-                    d.completed ? "bg-muted/40 border-transparent opacity-60" : "bg-card border-border hover:border-red-300"
-                  }`}
-                >
-                  <button onClick={() => onToggleDeadline(d.id)} className="flex-shrink-0">
-                    {d.completed
-                      ? <CheckCircle2 size={16} className="text-red-500" />
-                      : <Circle size={16} className="text-red-400" />}
-                  </button>
-                  <span className="w-0.5 h-6 rounded-full flex-shrink-0 bg-red-500" />
-                  <span className={`text-sm flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : ""}`}>{d.title}</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">{daysOver}일 초과</span>
-                </div>
-              );
-            })}
-            {todayDeadlines.map(d => (
-              <div key={d.id}
-                className={`group/dl flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
-                  d.completed ? "bg-muted/40 border-transparent opacity-60" : "bg-card border-border hover:border-red-300"
-                }`}
-              >
-                <button onClick={() => onToggleDeadline(d.id)} className="flex-shrink-0">
-                  {d.completed
-                    ? <CheckCircle2 size={16} className="text-red-500" />
-                    : <Circle size={16} className="text-red-500" />}
-                </button>
-                <span className="w-0.5 h-6 rounded-full flex-shrink-0 bg-red-500" />
-                <span className={`text-sm flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : ""}`}>{d.title}</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">D-0</span>
-              </div>
-            ))}
+        {/* 지난 마감 — 이미 놓친 것. 항상 빨강 톤. */}
+        {overdueDeadlines.length > 0 && (
+          <div className="mb-4">
+            <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">지난 마감</div>
+            <div className="space-y-1.5">
+              {overdueDeadlines.map(d => {
+                const daysOver = Math.abs(daysBetween(parseLocalDate(d.dueDate), TODAY_DATE));
+                const tone = deadlineTone(-daysOver);
+                return (
+                  <div key={d.id}
+                    className={`group/dl flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
+                      d.completed ? "bg-muted/40 border-transparent opacity-60"
+                        : `${tone.bg} ${tone.border} ${tone.hoverBorder}`
+                    }`}
+                  >
+                    <button onClick={() => onToggleDeadline(d.id)} className="flex-shrink-0">
+                      {d.completed
+                        ? <CheckCircle2 size={16} className={tone.circle} />
+                        : <Circle size={16} className={tone.circleHollow} />}
+                    </button>
+                    <span className={`w-0.5 h-6 rounded-full flex-shrink-0 ${tone.stripe}`} />
+                    <span className={`text-sm flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : ""}`}>{d.title}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${tone.badge}`}>{daysOver}일 초과</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 이번 주 마감 일정 — 오늘 포함, 앞으로 남은 마감. D-day 배지·카드 톤이 남은 일수에 따라
+              초록→노랑→주황→빨강으로 바뀌어 급함 정도를 즉시 보이도록. */}
+        {upcomingDeadlines.length > 0 && (
+          <div className="mb-4">
+            <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">이번 주 마감 일정</div>
+            <div className="space-y-1.5">
+              {upcomingDeadlines.map(d => {
+                const daysLeft = daysBetween(parseLocalDate(d.dueDate), TODAY_DATE);
+                const tone = deadlineTone(daysLeft);
+                return (
+                  <div key={d.id}
+                    className={`group/dl flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
+                      d.completed ? "bg-muted/40 border-transparent opacity-60"
+                        : `${tone.bg} ${tone.border} ${tone.hoverBorder}`
+                    }`}
+                  >
+                    <button onClick={() => onToggleDeadline(d.id)} className="flex-shrink-0">
+                      {d.completed
+                        ? <CheckCircle2 size={16} className={tone.circle} />
+                        : <Circle size={16} className={tone.circleHollow} />}
+                    </button>
+                    <span className={`w-0.5 h-6 rounded-full flex-shrink-0 ${tone.stripe}`} />
+                    <span className={`text-sm flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : ""}`}>{d.title}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${tone.badge}`}>D-{daysLeft}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
