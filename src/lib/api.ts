@@ -366,28 +366,6 @@ export async function deleteTodoRow(id: string): Promise<void> {
   await db.execute("DELETE FROM todos WHERE id = ?", [id]);
 }
 
-// ── schedule_templates ─────────────────────────────────────────
-export async function fetchScheduleTemplates() {
-  const db = await getDb();
-  const rows = await db.select<any[]>("SELECT * FROM schedule_templates ORDER BY created_at");
-  return rows.map(t => ({ id: t.id, name: t.name, blocks: JSON.parse(t.blocks) }));
-}
-
-export async function createScheduleTemplateRow(name: string, blocks: any[]) {
-  const db = await getDb();
-  const id = uuid();
-  await db.execute(
-    "INSERT INTO schedule_templates (id, name, blocks) VALUES (?, ?, ?)",
-    [id, name, JSON.stringify(blocks)]
-  );
-  return { id, name, blocks };
-}
-
-export async function deleteScheduleTemplateRow(id: string) {
-  const db = await getDb();
-  await db.execute("DELETE FROM schedule_templates WHERE id = ?", [id]);
-}
-
 // ── timer_sessions ──────────────────────────────────────────────
 // 한 "세션"은 하나의 연속된 실행 구간. 사용자가 정지 버튼을 누르거나(end_reason: "manual"),
 // 뽀모도로 phase 전환 시(역시 "manual"로 마감), 자정 롤오버 등으로 자동 마감됨("auto").

@@ -3,7 +3,7 @@ import {
   CheckCircle2, Circle, Clock, Play, Pause,
   Plus, X, ChevronLeft, ChevronRight, List, Grid3x3,
   BarChart2, Settings, Calendar, Target, Flame, FileText,
-  Edit3, Check, AlertCircle, Info, PictureInPicture2 as PictureInPicture,
+  Edit3, Check, AlertCircle, PictureInPicture2 as PictureInPicture,
   Folder, FolderPlus, MoreVertical, ArrowLeft, ArrowUpDown, Trash2,
   Minus, Square, Copy,
 } from "lucide-react";
@@ -13,7 +13,6 @@ import {
   deleteBlocksByRepeatGroup as apiDeleteRepeatGroup, deleteRepeatInstancesExceptOrigin, insertBlocksBulk,
   fetchDeadlines, createDeadline, toggleDeadlineRow, deleteDeadlineRow,
   fetchTodos, createTodo, updateTodo, toggleTodoRow, deleteTodoRow, bulkUpdateTodoOrder, type Todo,
-  fetchScheduleTemplates, createScheduleTemplateRow, deleteScheduleTemplateRow,
   fetchTodaySessions, startTimerSession, endTimerSession, deleteTodaySessions, fetchFocusSecByDate,
   fetchChecklistItems, createChecklistItem, toggleChecklistItemRow, deleteChecklistItemRow,
   fetchNotes, createNote, updateNote, deleteNote, moveNoteToFolder, reorderNotes,
@@ -73,12 +72,6 @@ interface BlockRepeat {
   endType: "none" | "count" | "date";
   endCount: number;
   endDate: string;       // ISO date string
-}
-
-interface ScheduleTemplate {
-  id: string;
-  name: string;
-  blocks: Pick<Block, "title" | "color" | "startH" | "startM" | "endH" | "endM" | "tags" | "memo">[];
 }
 
 interface TimerSession {
@@ -245,7 +238,6 @@ export default function App() {
   const [deadlines, setDeadlines] = useState<Deadline[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [scheduleTemplates, setScheduleTemplates] = useState<ScheduleTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedBlock, setSelectedBlock] = useState<Block | null>(null);
@@ -286,13 +278,12 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [tpls, blks, dls, sts, tds] = await Promise.all([
-          fetchTemplates(), fetchBlocks(), fetchDeadlines(), fetchScheduleTemplates(), fetchTodos(),
+        const [tpls, blks, dls, tds] = await Promise.all([
+          fetchTemplates(), fetchBlocks(), fetchDeadlines(), fetchTodos(),
         ]);
         setTemplates(tpls);
         setBlocks(blks);
         setDeadlines(dls);
-        setScheduleTemplates(sts);
         setTodos(tds);
       } catch (e: any) {
         setLoadError(e.message ?? "데이터를 불러오지 못했어요");
@@ -1035,48 +1026,6 @@ export default function App() {
     })();
   };
 
-  const saveScheduleTemplate = (name: string, date: string) => {
-    const dayBlocks = blocks.filter(b => b.date === date && !b.parentBlockId);
-    if (!dayBlocks.length) return;
-    const blocksSnapshot = dayBlocks.map(b => ({ title: b.title, color: b.color, startH: b.startH, startM: b.startM, endH: b.endH, endM: b.endM, tags: b.tags, memo: b.memo }));
-    // 밀리초가 같은 프레임에 두 번 클릭이 들어오면 Date.now() 만으론 tempId가 충돌해서
-     // 두 번째 낙관적 로우가 첫 번째 real 로우로 통째로 덮어씌워지고, DB엔 두 건이지만 화면엔
-     // 한 건만 보이는 유령 상태가 나옴. randomUUID로 충돌을 원천 차단.
-    const tempId = `temp-${crypto.randomUUID()}`;
-    setScheduleTemplates(ts => [...ts, { id: tempId, name, blocks: blocksSnapshot }]);
-    createScheduleTemplateRow(name, blocksSnapshot)
-      .then(real => setScheduleTemplates(ts => ts.map(t => (t.id === tempId ? real : t))))
-      .catch(e => {
-        setScheduleTemplates(ts => ts.filter(t => t.id !== tempId));
-        // 저장 실패를 조용히 롤백만 하면 사용자는 '저장'을 눌렀는데도 목록에서 사라져
-        // 원인을 알 수 없음.
-        notifyError("일정 템플릿 저장 실패")(e);
-      });
-  };
-
-  const applyScheduleTemplate = (templateId: string, targetDate: string) => {
-    const tpl = scheduleTemplates.find(t => t.id === templateId);
-    if (!tpl) return;
-    const existing = blocks.filter(b => b.date === targetDate && !b.parentBlockId);
-    const newBlocks = tpl.blocks
-      .filter(tb => !existing.some(b => tb.startH * 60 + tb.startM < b.endH * 60 + b.endM && tb.endH * 60 + tb.endM > b.startH * 60 + b.startM))
-      .map((tb) => ({ ...tb, id: `temp-tpl-${crypto.randomUUID()}`, date: targetDate, completed: false }));
-    if (!newBlocks.length) return;
-    setBlocks(bs => [...bs, ...newBlocks]);
-    insertBlocksBulk(newBlocks)
-      .then(() => refetchBlocks())
-      .catch(async (e) => {
-        notifyError("일정 템플릿 적용 실패")(e);
-        // 낙관적으로 추가한 temp-tpl 블록이 로컬 상태에 남지 않도록 DB와 동기화.
-        try { await refetchBlocks(); } catch {}
-      });
-  };
-
-  const deleteScheduleTemplate = (id: string) => {
-    setScheduleTemplates(ts => ts.filter(t => t.id !== id));
-    deleteScheduleTemplateRow(id).catch(notifyError("일정 템플릿 삭제 실패"));
-  };
-
   const toggleDeadline = (id: string) => {
     const target = deadlines.find(d => d.id === id);
     if (!target) return;
@@ -1349,10 +1298,6 @@ export default function App() {
               onUpdateBlock={updateBlock}
               onUpdateBlockLocal={updateBlockLocal}
               onDeleteBlock={deleteBlock}
-              scheduleTemplates={scheduleTemplates}
-              onSaveTemplate={saveScheduleTemplate}
-              onApplyTemplate={applyScheduleTemplate}
-              onDeleteTemplate={deleteScheduleTemplate}
               onAddTemplate={addTemplate}
               onDeleteBlockTemplate={deleteTemplate}
               paletteColors={paletteColors}
@@ -2048,7 +1993,7 @@ function TodaySection({
 function CalendarSection({
   blocks, deadlines, templates, calView, setCalView, calMode, setCalMode,
   templateOpen, setTemplateOpen, onSelect, onToggle, onToggleDeadline, onAddBlock, onUpdateBlock, onUpdateBlockLocal, onDeleteBlock,
-  scheduleTemplates, onSaveTemplate, onApplyTemplate, onDeleteTemplate, onAddTemplate, onDeleteBlockTemplate,
+  onAddTemplate, onDeleteBlockTemplate,
   paletteColors, onAddPaletteColor, onRemovePaletteColor,
   blockClipboard, setBlockClipboard, onBulkMove, onPasteBlocks, onBulkDelete, onBulkSetRepeat, pushUndo,
   todos, onAddTodo, onToggleTodo, onDeleteTodo, onUpdateTodoTitle, onMoveTodo, onSwapTodo, onReorderTodos,
@@ -2069,10 +2014,6 @@ function CalendarSection({
   onUpdateBlock: (id: string, changes: Partial<Block>) => void;
   onUpdateBlockLocal: (id: string, changes: Partial<Block>) => void;
   onDeleteBlock: (id: string) => void;
-  scheduleTemplates: ScheduleTemplate[];
-  onSaveTemplate: (name: string, date: string) => void;
-  onApplyTemplate: (templateId: string, targetDate: string) => void;
-  onDeleteTemplate: (id: string) => void;
   onAddTemplate: (t: { title: string; color: string; tags: string[]; kind?: "time" | "todo" }) => void;
   onDeleteBlockTemplate: (id: string) => void;
   paletteColors: string[];
@@ -2103,9 +2044,6 @@ function CalendarSection({
   const topLevelBlocks = blocks.filter(b => !b.parentBlockId);
 
   const [viewDate, setViewDate] = useState(TODAY_DATE);
-  const [saveTplName, setSaveTplName] = useState("");
-  const [showSaveTpl, setShowSaveTpl] = useState(false);
-  const [showTplHelp, setShowTplHelp] = useState(false);
   // 어느 종류의 템플릿을 새로 만드는지 — null 이면 폼 닫힘, "time"/"todo" 면 해당 종류로 열림.
   const [showNewTpl, setShowNewTpl] = useState<null | "time" | "todo">(null);
   const [showTplCustomColor, setShowTplCustomColor] = useState(false);
@@ -3414,61 +3352,6 @@ function CalendarSection({
                 </div>
               )}
 
-              {/* 저장된 일정 (시간표 전체 세트) — 할 일만 보는 화면에서는 숨김. */}
-              {contentView !== "todos" && (
-              <div className="mt-3 pt-2 border-t border-sidebar-border">
-                <div className="flex items-center justify-between px-2 py-1">
-                  <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">저장된 일정</div>
-                  <button
-                    onClick={() => setShowTplHelp(v => !v)}
-                    title="사용법"
-                    className={`p-0.5 rounded transition-colors ${showTplHelp ? "text-foreground bg-sidebar-accent" : "text-muted-foreground hover:text-foreground"}`}
-                  >
-                    <Info size={11} />
-                  </button>
-                </div>
-                {showTplHelp && (
-                  <div className="text-[10px] text-muted-foreground bg-sidebar-accent/60 rounded-md px-2 py-1.5 mx-2 mb-1 leading-snug space-y-1">
-                    <p><span className="text-foreground font-medium">저장:</span> 지금 보고 있는 날짜에 만들어둔 시간 블록들을 하나의 세트로 저장해요.</p>
-                    <p><span className="text-foreground font-medium">적용:</span> 다른 날짜로 이동한 뒤 아래 목록 항목에 마우스를 올리면 나오는 <span className="text-foreground font-medium">적용</span> 버튼을 눌러 그 날에 붙여넣어요. 이미 잡힌 일정과 겹치는 시간대는 자동으로 건너뜁니다.</p>
-                  </div>
-                )}
-                {scheduleTemplates.length === 0 && !showTplHelp && (
-                  <p className="text-[10px] text-muted-foreground px-2 py-1 leading-tight">저장된 일정이 없어요.<br/>아래 "이 날 일정 저장"을 눌러 저장하세요.</p>
-                )}
-                {scheduleTemplates.map(st => (
-                  <div key={st.id} className="group/st flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-sidebar-accent text-xs">
-                    <span className="flex-1 truncate text-foreground/80">{st.name}</span>
-                    <button
-                      onClick={() => onApplyTemplate(st.id, toDateStr(viewDate))}
-                      className="opacity-0 group-hover/st:opacity-100 text-[9px] px-1.5 py-0.5 rounded bg-primary text-primary-foreground transition-opacity"
-                      title="현재 날짜에 적용"
-                    >적용</button>
-                    <button
-                      onClick={() => onDeleteTemplate(st.id)}
-                      className="opacity-0 group-hover/st:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                    ><X size={10} /></button>
-                  </div>
-                ))}
-
-                {/* Save current day */}
-                {showSaveTpl ? (
-                  <form onSubmit={e => { e.preventDefault(); if (saveTplName.trim()) { onSaveTemplate(saveTplName.trim(), (viewDays[0] && toDateStr(viewDays[0])) || TODAY_STR); setSaveTplName(""); setShowSaveTpl(false); } }}
-                    className="flex gap-1 px-2 mt-1">
-                    <input autoFocus value={saveTplName} onChange={e => setSaveTplName(e.target.value)}
-                      placeholder="이름..."
-                      className="flex-1 text-[10px] px-2 py-1 rounded bg-muted outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground" />
-                    <button type="submit" className="text-[10px] text-sky-600 font-medium px-1">저장</button>
-                    <button type="button" onClick={() => setShowSaveTpl(false)} className="text-muted-foreground"><X size={10}/></button>
-                  </form>
-                ) : (
-                  <button onClick={() => setShowSaveTpl(true)}
-                    className="flex items-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent transition-colors mt-0.5">
-                    <Plus size={11}/> 이 날 일정 저장
-                  </button>
-                )}
-              </div>
-              )}
             </div>
           )}
         </div>

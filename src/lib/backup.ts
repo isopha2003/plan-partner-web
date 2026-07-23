@@ -25,7 +25,6 @@ const TABLES = [
   "checklist_items",
   "deadlines",
   "todos",
-  "schedule_templates",
   "timer_sessions",
   "notes",
 ] as const;
@@ -43,7 +42,6 @@ const TABLE_COLUMNS: Record<TableName, readonly string[]> = {
   checklist_items: ["id", "block_id", "parent_item_id", "text", "completed", "sort_order", "created_at"],
   deadlines:       ["id", "title", "due_date", "completed", "completed_at", "created_at"],
   todos:           ["id", "title", "date", "end_date", "completed", "completed_at", "sort_order", "created_at"],
-  schedule_templates: ["id", "name", "blocks", "created_at"],
   timer_sessions:  ["id", "date", "started_at", "ended_at", "end_reason", "created_at"],
   notes:           ["id", "title", "content", "category", "folder_id", "sort_order", "is_draft", "created_at", "updated_at"],
 };

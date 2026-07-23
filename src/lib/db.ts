@@ -60,12 +60,9 @@ CREATE TABLE IF NOT EXISTS deadlines (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS schedule_templates (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  blocks TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+-- schedule_templates 테이블은 "이 날 일정 저장" 기능과 함께 제거됨. 복사/붙여넣기가 대체.
+-- 기존 사용자의 DB에서 남아있을 수 있는 잔재 테이블을 정리.
+DROP TABLE IF EXISTS schedule_templates;
 
 CREATE TABLE IF NOT EXISTS timer_sessions (
   id TEXT PRIMARY KEY,
