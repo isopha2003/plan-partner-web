@@ -2222,6 +2222,12 @@ function CalendarSection({
                 onMouseDown={e => {
                   if (e.button !== 0) return; // 좌클릭만
                   if (resizing || dragBlockId || dragTplId) return;
+                  // 블록·리사이즈 핸들 등 자식 위에서 눌린 mousedown 은 여기까지 버블링해서
+                  // 마퀴로 승격돼 버림 — 그러면 사용자가 블록을 잡고 드래그하는 사이 마퀴 상태가
+                  // 함께 켜졌다가 HTML5 dragend 로 mouseup 이 억제되면서 마퀴가 꺼지지 않고
+                  // 남아, 이후 mousedown+이동이 곧바로 "또 하나의 마퀴" 로 잡히는 유령 상태가 됨.
+                  // e.target 이 컬럼 배경 그 자체일 때만 진행.
+                  if (e.target !== e.currentTarget) return;
                   const rect = e.currentTarget.getBoundingClientRect();
                   const startAbsX = e.clientX;
                   const startAbsY = e.clientY;
@@ -2462,6 +2468,10 @@ function CalendarSection({
                         e.dataTransfer.effectAllowed = "move";
                         setDragBlockId(block.id);
                         setDragBlockOffsetMin(offsetMin);
+                        // 블록 드래그가 시작되면 그 사이 잘못 켜졌을 수 있는 마퀴 상태를 방어적으로 해제.
+                        // HTML5 dragend 는 mouseup 을 억제하므로 마퀴가 mouseup 으로 자연 종료되지 않아
+                        // 유령 상태로 남아있는 것을 원천 차단.
+                        setMarquee(null);
                       }}
                       onDragEnd={() => { setDragBlockId(null); setDropTarget(null); }}
                       onContextMenu={e => {
