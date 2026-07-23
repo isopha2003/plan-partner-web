@@ -3593,7 +3593,8 @@ function TodoPanel({
               </div>
             );
           })}
-          {onGoNext && <div className="w-8 flex-shrink-0" />}
+          {/* 우측 chevron 자리는 요일 헤더처럼 absolute 로 얹혀야 컬럼 flex 폭이 안 줄어들어
+              헤더/할 일 컬럼과 정렬됨. 여기선 얹을 요소가 없어 그냥 비워둠. */}
         </div>
       )}
       {/* 컬럼들을 공유 스크롤에 담고 scrollbar-gutter stable 로 시간그리드 컬럼과 폭을 맞춤.
