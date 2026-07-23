@@ -3108,27 +3108,26 @@ function CalendarSection({
             </button>
           )}
           {calView !== "month" && (
-            /* 시간표 / 할 일 두 개의 독립 토글. 각각 ON/OFF 가능하지만 최소 하나는 켜져 있어야
-               contentView 가 정의되므로, 마지막 하나를 끄려는 클릭은 무시함. */
+            /* 시간표 ↔ 할 일 ↔ 둘 다 순서로 순환하는 단일 토글 버튼.
+               텍스트 라벨은 항상 두 개 다 보이고, 활성 상태는 하이라이트로 표시. */
             (() => {
               const gridOn = contentView === "grid" || contentView === "both";
               const todosOn = contentView === "todos" || contentView === "both";
-              const toggleGrid = () => {
-                if (gridOn && !todosOn) return; // 마지막 하나 보호
-                if (gridOn) setContentView("todos");
-                else setContentView(todosOn ? "both" : "grid");
+              const cycle = () => {
+                if (contentView === "grid") setContentView("todos");
+                else if (contentView === "todos") setContentView("both");
+                else setContentView("grid");
               };
-              const toggleTodos = () => {
-                if (todosOn && !gridOn) return;
-                if (todosOn) setContentView("grid");
-                else setContentView(gridOn ? "both" : "todos");
-              };
-              const btn = (on: boolean) => `px-2.5 py-1 text-[11px] rounded-md transition-all ${on ? "bg-card shadow-sm font-medium" : "text-muted-foreground hover:text-foreground"}`;
+              const label = (on: boolean) => `px-2.5 py-1 text-[11px] rounded-md transition-all ${on ? "bg-card shadow-sm font-medium" : "text-muted-foreground"}`;
               return (
-                <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5" title="시간표 / 할 일 (독립 토글)">
-                  <button onClick={toggleGrid} className={btn(gridOn)}>시간표</button>
-                  <button onClick={toggleTodos} className={btn(todosOn)}>할 일</button>
-                </div>
+                <button
+                  onClick={cycle}
+                  className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5 hover:bg-muted/80 transition-colors"
+                  title="시간표 → 할 일 → 둘 다 순환"
+                >
+                  <span className={label(gridOn)}>시간표</span>
+                  <span className={label(todosOn)}>할 일</span>
+                </button>
               );
             })()
           )}
