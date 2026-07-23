@@ -3390,6 +3390,8 @@ function CalendarSection({
                   onToggle={onToggleTodo}
                   onDelete={onDeleteTodo}
                   onUpdateTitle={onUpdateTodoTitle}
+                  deadlines={deadlines}
+                  onToggleDeadline={onToggleDeadline}
                   showDayHeader={contentView === "todos"}
                   onGoPrev={goPrev}
                   onGoNext={goNext}
@@ -3472,6 +3474,7 @@ function CalendarSection({
 // 각 컬럼 하단 입력창. 실시간 편집은 title 클릭 → inline input.
 function TodoPanel({
   todos, viewDays, onAdd, onToggle, onDelete, onUpdateTitle,
+  deadlines, onToggleDeadline,
   showDayHeader, onGoPrev, onGoNext, onMoveTodo, onSwapTodo, onReorderTodos,
 }: {
   todos: Todo[];
@@ -3480,6 +3483,10 @@ function TodoPanel({
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
+  // 할 일만 보는 모드(showDayHeader=true) 에서만 자체 마감 행을 그림. 시간 그리드가 함께 보일
+  // 땐 그쪽 상단의 마감 행이 유일한 소스.
+  deadlines: Deadline[];
+  onToggleDeadline: (id: string) => void;
   showDayHeader?: boolean;
   onGoPrev?: () => void;
   onGoNext?: () => void;
@@ -3550,6 +3557,43 @@ function TodoPanel({
               title="다음"
             ><ChevronRight size={16} /></button>
           )}
+        </div>
+      )}
+      {/* 고정 마감 행 — 할 일만 보는 모드에선 시간 그리드가 없으니 여기서 마감을 대신 노출.
+           시간 그리드 상단의 마감 행과 동일한 톤/포맷. */}
+      {showDayHeader && (
+        <div className="relative flex border-b border-border flex-shrink-0 bg-card items-stretch overflow-hidden [scrollbar-gutter:stable]">
+          <div className="w-12 flex-shrink-0 flex items-start justify-end pt-1 pr-2 text-[9px] text-muted-foreground select-none">마감</div>
+          {viewDays.map((day, i) => {
+            const ds = toDateStr(day);
+            const cellDeadlines = deadlines.filter(d => d.dueDate === ds);
+            return (
+              <div key={i} className="flex-1 min-w-0 border-l border-border/40 px-1 py-1 space-y-0.5">
+                {cellDeadlines.map(d => {
+                  const daysLeft = daysBetween(parseLocalDate(d.dueDate), TODAY_DATE);
+                  const color = deadlineToneHex(daysLeft);
+                  return (
+                    <div
+                      key={d.id}
+                      onClick={() => onToggleDeadline(d.id)}
+                      className={`rounded overflow-hidden text-[10px] cursor-pointer transition-all flex items-center gap-1 pr-1 ${d.completed ? "opacity-60" : "hover:brightness-95"}`}
+                      style={{ backgroundColor: color + "28", borderLeft: `3px solid ${color}` }}
+                      title={d.completed ? "완료됨 — 다시 열기" : "완료 처리"}
+                    >
+                      <span
+                        className={`truncate font-medium leading-tight px-1 py-0.5 flex-1 min-w-0 ${d.completed ? "line-through" : ""}`}
+                        style={{ color }}
+                      >{d.title}</span>
+                      <span className="text-[9px] font-semibold leading-none flex-shrink-0" style={{ color }}>
+                        {formatDDay(daysLeft)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+          {onGoNext && <div className="w-8 flex-shrink-0" />}
         </div>
       )}
       {/* 컬럼들을 공유 스크롤에 담고 scrollbar-gutter stable 로 시간그리드 컬럼과 폭을 맞춤.
