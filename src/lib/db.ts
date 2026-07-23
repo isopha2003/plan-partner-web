@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS block_templates (
   title TEXT NOT NULL,
   color TEXT NOT NULL,
   tags TEXT NOT NULL DEFAULT '[]',
+  -- 'time' = 시간대별 블록 템플릿(기본, 드래그해서 시간표에 배치),
+  -- 'todo' = 시간대 없이 할 일 목록에 놓을 일정 템플릿.
+  kind TEXT NOT NULL DEFAULT 'time',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -138,6 +141,11 @@ const NOTE_UPGRADES = [
   "ALTER TABLE notes ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0",
 ];
 
+// 기존 설치에서 block_templates 에 kind 컬럼을 사후 추가. 이미 있으면 조용히 실패.
+const BLOCK_TEMPLATE_UPGRADES = [
+  "ALTER TABLE block_templates ADD COLUMN kind TEXT NOT NULL DEFAULT 'time'",
+];
+
 let dbPromise: Promise<Database> | null = null;
 
 // 첫 호출 시 DB 파일 열고 스키마 초기화, 이후 호출은 같은 인스턴스 반환.
@@ -172,6 +180,9 @@ export function getDb(): Promise<Database> {
       //    새 DB면 notes 테이블이 아직 없어 각 ALTER가 조용히 실패(무시)하고,
       //    이후 SCHEMA의 CREATE TABLE이 전체 컬럼을 갖춘 채 만든다.
       for (const stmt of NOTE_UPGRADES) {
+        try { await db.execute(stmt); } catch { /* column/table already exists or not yet created */ }
+      }
+      for (const stmt of BLOCK_TEMPLATE_UPGRADES) {
         try { await db.execute(stmt); } catch { /* column/table already exists or not yet created */ }
       }
       try {

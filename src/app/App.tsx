@@ -63,6 +63,8 @@ interface Template {
   title: string;
   color: string;
   tags: string[];
+  // 'time' = 시간대별 블록 템플릿, 'todo' = 시간대 없이 할 일 목록 템플릿.
+  kind: "time" | "todo";
 }
 
 interface BlockRepeat {
@@ -1048,15 +1050,16 @@ export default function App() {
     deleteDeadlineRow(id).catch(notifyError("마감 삭제 실패"));
   };
 
-  const addTemplate = (t: { title: string; color: string; tags: string[] }) => {
+  const addTemplate = (t: { title: string; color: string; tags: string[]; kind?: "time" | "todo" }) => {
     // 밀리초가 같은 프레임에 두 번 클릭이 들어오면 Date.now() 만으론 tempId가 충돌해서
      // 두 번째 낙관적 로우가 첫 번째 real 로우로 통째로 덮어씌워지고, DB엔 두 건이지만 화면엔
      // 한 건만 보이는 유령 상태가 나옴. randomUUID로 충돌을 원천 차단.
     const tempId = `temp-${crypto.randomUUID()}`;
-    setTemplates(ts => [...ts, { id: tempId, ...t }]);
-    createTemplate(t)
+    const kind: "time" | "todo" = t.kind === "todo" ? "todo" : "time";
+    setTemplates(ts => [...ts, { id: tempId, title: t.title, color: t.color, tags: t.tags, kind }]);
+    createTemplate({ ...t, kind })
       .then(real => setTemplates(ts => ts.map(x => (x.id === tempId ? real : x))))
-      .catch(e => { setTemplates(ts => ts.filter(x => x.id !== tempId)); notifyError("블록 템플릿 추가 실패")(e); });
+      .catch(e => { setTemplates(ts => ts.filter(x => x.id !== tempId)); notifyError("템플릿 추가 실패")(e); });
   };
 
   // 템플릿 삭제 — 이미 이 템플릿으로 만들어진 블록은 그대로 두고 template_id만 NULL로 끊김.
@@ -1777,18 +1780,18 @@ function TodaySection({
           </div>
         )}
 
-        {/* Today's deadlines */}
+        {/* Today's deadlines — 캘린더의 마감 표시와 동일한 붉은 계열로 통일. */}
         {todayDeadlines.length > 0 && (
-          <div className="mb-4 p-3 rounded-xl border border-amber-200 bg-amber-50/40">
-            <div className="text-[11px] font-semibold text-amber-700 uppercase tracking-wide mb-2">오늘 마감</div>
+          <div className="mb-4 p-3 rounded-xl border border-red-200 bg-red-50/40">
+            <div className="text-[11px] font-semibold text-red-600 uppercase tracking-wide mb-2">오늘 마감</div>
             <div className="space-y-1.5">
               {todayDeadlines.map(d => (
                 <div key={d.id} className="flex items-center gap-2.5">
                   <button onClick={() => onToggleDeadline(d.id)}>
-                    <Circle size={16} className="text-amber-500" />
+                    <Circle size={16} className="text-red-500" />
                   </button>
                   <span className="text-sm flex-1 min-w-0 truncate">{d.title}</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium flex-shrink-0">D-0</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium flex-shrink-0">D-0</span>
                 </div>
               ))}
             </div>
@@ -1924,7 +1927,7 @@ function CalendarSection({
   onSaveTemplate: (name: string, date: string) => void;
   onApplyTemplate: (templateId: string, targetDate: string) => void;
   onDeleteTemplate: (id: string) => void;
-  onAddTemplate: (t: { title: string; color: string; tags: string[] }) => void;
+  onAddTemplate: (t: { title: string; color: string; tags: string[]; kind?: "time" | "todo" }) => void;
   onDeleteBlockTemplate: (id: string) => void;
   paletteColors: string[];
   onAddPaletteColor: (color: string) => void;
@@ -1954,7 +1957,8 @@ function CalendarSection({
   const [saveTplName, setSaveTplName] = useState("");
   const [showSaveTpl, setShowSaveTpl] = useState(false);
   const [showTplHelp, setShowTplHelp] = useState(false);
-  const [showNewTpl, setShowNewTpl] = useState(false);
+  // 어느 종류의 템플릿을 새로 만드는지 — null 이면 폼 닫힘, "time"/"todo" 면 해당 종류로 열림.
+  const [showNewTpl, setShowNewTpl] = useState<null | "time" | "todo">(null);
   const [showTplCustomColor, setShowTplCustomColor] = useState(false);
   const [newTplTitle, setNewTplTitle] = useState("");
   const [newTplColor, setNewTplColor] = useState("#5AA9E6");
@@ -1984,6 +1988,25 @@ function CalendarSection({
   const timeGridRef = useRef<HTMLDivElement>(null);
   // 일/주 뷰 콘텐츠 모드 — grid(시간표만) / todos(일정만) / both(위 시간표 + 아래 일정 리스트).
   const [contentView, setContentView] = useState<"grid" | "todos" | "both">("both");
+  // both 뷰에서 상단(시간표) 비율 — 하단(일정) 은 1 - splitRatio. 사용자가 경계선을 드래그해서 조정.
+  const [splitRatio, setSplitRatio] = useState(0.6);
+  const bothContainerRef = useRef<HTMLDivElement>(null);
+  const startSplitterDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = bothContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const onMove = (mv: MouseEvent) => {
+      const ratio = Math.max(0.15, Math.min(0.85, (mv.clientY - rect.top) / rect.height));
+      setSplitRatio(ratio);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
   // 월 뷰 셀 클릭으로 새 todo 인라인 입력 중인 날짜 & 각 셀 별 draft 입력값.
   const [monthEditing, setMonthEditing] = useState<string | null>(null);
   const [monthDrafts, setMonthDrafts] = useState<Record<string, string>>({});
@@ -2217,9 +2240,14 @@ function CalendarSection({
   // ── Shared time-grid renderer (day + week) ──────────────────────
   const renderTimeGrid = (days: Date[]) => (
     <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-      {/* Day headers */}
-      <div className="flex border-b border-border flex-shrink-0 bg-card">
-        <div className="w-12 flex-shrink-0" />
+      {/* Day headers — 좌측 게이지 자리(w-12) 안에 이전 화살표, 우측 끝에 겹쳐 다음 화살표.
+           우측은 absolute 로 얹어 아래 시간 그리드 컬럼 폭과 어긋나지 않게 함. */}
+      <div className="relative flex border-b border-border flex-shrink-0 bg-card items-stretch">
+        <button
+          onClick={goPrev}
+          className="w-12 flex-shrink-0 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+          title="이전"
+        ><ChevronLeft size={16} /></button>
         {days.map((day, i) => {
           const isToday = toDateStr(day) === TODAY_STR;
           const dow = day.getDay();
@@ -2239,33 +2267,16 @@ function CalendarSection({
             </div>
           );
         })}
+        <button
+          onClick={goNext}
+          className="absolute right-0 top-0 bottom-0 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors rounded-l"
+          title="다음"
+        ><ChevronRight size={16} /></button>
       </div>
 
-      {/* Scrollable grid — 마감 슬롯도 이 안에 넣어야 그리드와 폭이 정확히 맞음(스크롤바 폭 이슈) */}
+      {/* Scrollable grid — 예전엔 여기 상단에 마감 sticky 슬롯이 있었지만, 마감을 일정(TodoPanel) 안에서
+           붉은 블록으로 표시하도록 통일하면서 그리드 상단에서는 제거함. */}
       <div ref={gridScrollRef} className="flex-1 overflow-auto">
-        {/* 마감 슬롯 — sticky로 상단 고정, 스크롤해도 화면에 계속 보임 */}
-        <div className="flex border-b border-border sticky top-0 z-20 bg-card min-h-[36px]">
-          <div className="w-12 flex-shrink-0 flex items-start justify-end pt-1.5 pr-2 text-[9px] text-muted-foreground select-none">마감</div>
-          {days.map((day, di) => {
-            const dateStr = toDateStr(day);
-            const dayDeadlines = deadlines.filter(d => d.dueDate === dateStr);
-            return (
-              <div key={di} className="flex-1 border-l border-border py-1 px-1 min-w-0 space-y-0.5">
-                {dayDeadlines.map(d => (
-                  <button
-                    key={d.id}
-                    onClick={e => { e.stopPropagation(); onToggleDeadline(d.id); }}
-                    title={d.completed ? "완료됨 — 다시 열기" : "완료 처리"}
-                    className={`w-full text-left text-[10px] px-1.5 py-0.5 rounded transition-colors ${d.completed ? "bg-muted/40 text-muted-foreground line-through" : "bg-red-100 text-red-700 hover:bg-red-200"}`}
-                  >
-                    <span className="truncate block">{d.title}</span>
-                  </button>
-                ))}
-              </div>
-            );
-          })}
-        </div>
-
         <div ref={timeGridRef} className="flex relative" style={{ height: TOTAL_H * HOUR_H }}>
           {/* 마퀴 오버레이 — 그리드 전체 좌표계에서 렌더되어 여러 요일 컬럼을 가로지를 수 있고,
                세로로도 24시간 그리드 어디에서든 클립 없이 이어짐. z-40 로 스틱키 헤더 위에 뜸. */}
@@ -2695,11 +2706,21 @@ function CalendarSection({
 
     return (
       <div className="flex-1 overflow-auto min-w-0">
-        {/* Day of week headers */}
-        <div className="grid grid-cols-7 border-b border-border flex-shrink-0 bg-card sticky top-0 z-10">
+        {/* Day of week headers — 좌우 끝에 이전/다음 화살표를 겹쳐 얹어 네비게이션. */}
+        <div className="relative grid grid-cols-7 border-b border-border flex-shrink-0 bg-card sticky top-0 z-10">
           {["일","월","화","수","목","금","토"].map((d, i) => (
             <div key={d} className={`text-center text-[10px] py-2 font-medium ${i===0?"text-red-400":i===6?"text-blue-400":"text-muted-foreground"}`}>{d}</div>
           ))}
+          <button
+            onClick={goPrev}
+            className="absolute left-0 top-0 bottom-0 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            title="이전 달"
+          ><ChevronLeft size={14} /></button>
+          <button
+            onClick={goNext}
+            className="absolute right-0 top-0 bottom-0 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            title="다음 달"
+          ><ChevronRight size={14} /></button>
         </div>
 
         <div className="grid grid-cols-7">
@@ -2886,11 +2907,9 @@ function CalendarSection({
             ))}
           </div>
         </div>
-        {/* 중앙: 날짜 라벨 양 끝에 이전/다음 화살표를 붙여 그 자체가 네비게이션 컨트롤이 되도록. */}
-        <div className="flex items-center gap-0.5">
-          <button onClick={goPrev} className="p-1.5 rounded hover:bg-muted transition-colors" title="이전"><ChevronLeft size={15}/></button>
+        {/* 중앙: 날짜 라벨만 표시 — 이동 화살표는 아래 요일/날짜 헤더의 좌우 끝으로 이동. */}
+        <div className="flex items-center">
           <span className="text-xs px-2 text-muted-foreground min-w-[180px] text-center">{headerLabel}</span>
-          <button onClick={goNext} className="p-1.5 rounded hover:bg-muted transition-colors" title="다음"><ChevronRight size={15}/></button>
         </div>
         <div className="flex-1 flex items-center gap-2 justify-end">
           {calView !== "month" && (
@@ -2901,18 +2920,29 @@ function CalendarSection({
             </button>
           )}
           {calView !== "month" && (
-            <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5" title="시간표 / 일정 / 둘 다">
-              {([
-                { v: "grid" as const, label: "시간" },
-                { v: "both" as const, label: "둘 다" },
-                { v: "todos" as const, label: "일정" },
-              ]).map(o => (
-                <button key={o.v} onClick={() => setContentView(o.v)}
-                  className={`px-2.5 py-1 text-[11px] rounded-md transition-all ${contentView===o.v?"bg-card shadow-sm font-medium":"text-muted-foreground hover:text-foreground"}`}>
-                  {o.label}
-                </button>
-              ))}
-            </div>
+            /* 시간표 / 할 일 두 개의 독립 토글. 각각 ON/OFF 가능하지만 최소 하나는 켜져 있어야
+               contentView 가 정의되므로, 마지막 하나를 끄려는 클릭은 무시함. */
+            (() => {
+              const gridOn = contentView === "grid" || contentView === "both";
+              const todosOn = contentView === "todos" || contentView === "both";
+              const toggleGrid = () => {
+                if (gridOn && !todosOn) return; // 마지막 하나 보호
+                if (gridOn) setContentView("todos");
+                else setContentView(todosOn ? "both" : "grid");
+              };
+              const toggleTodos = () => {
+                if (todosOn && !gridOn) return;
+                if (todosOn) setContentView("grid");
+                else setContentView(gridOn ? "both" : "todos");
+              };
+              const btn = (on: boolean) => `px-2.5 py-1 text-[11px] rounded-md transition-all ${on ? "bg-card shadow-sm font-medium" : "text-muted-foreground hover:text-foreground"}`;
+              return (
+                <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5" title="시간표 / 할 일 (독립 토글)">
+                  <button onClick={toggleGrid} className={btn(gridOn)}>시간표</button>
+                  <button onClick={toggleTodos} className={btn(todosOn)}>할 일</button>
+                </div>
+              );
+            })()
           )}
         </div>
       </div>
@@ -2927,108 +2957,178 @@ function CalendarSection({
           </button>
           {templateOpen && (
             <div className="p-2 space-y-0.5 overflow-y-auto flex-1">
-              {/* Block templates */}
-              <div className="text-[10px] font-medium text-muted-foreground px-2 py-1 uppercase tracking-wide">블록 템플릿</div>
-              {templates.map(t => (
-                <div key={t.id} draggable
-                  onDragStart={e => { e.dataTransfer.setData("templateId", t.id); setDragTplId(t.id); }}
-                  onDragEnd={() => { setDragTplId(null); setDropTarget(null); }}
-                  className="group/tpl flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent cursor-grab active:cursor-grabbing transition-colors text-xs select-none">
-                  <span className="size-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: t.color }} />
-                  <span className="flex-1 truncate text-foreground/80">{t.title}</span>
-                  <button
-                    onClick={e => { e.stopPropagation(); onDeleteBlockTemplate(t.id); }}
-                    onMouseDown={e => e.stopPropagation()}
-                    onDragStart={e => { e.stopPropagation(); e.preventDefault(); }}
-                    draggable={false}
-                    title="템플릿 삭제 (기존 블록은 유지)"
-                    className="opacity-0 group-hover/tpl:opacity-100 transition-opacity p-0.5 text-muted-foreground hover:text-destructive flex-shrink-0"
-                  ><X size={11} /></button>
-                </div>
-              ))}
-              {showNewTpl ? (
-                <div className="p-2 rounded-lg bg-sidebar-accent space-y-1.5">
-                  <input
-                    autoFocus
-                    value={newTplTitle}
-                    onChange={e => setNewTplTitle(e.target.value)}
-                    placeholder="제목..."
-                    className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
-                  />
-                  {/* 프리셋/커스텀 색상 팔레트 — hover 시 X로 삭제, 마지막 '+'로 새 색 추가 */}
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {paletteColors.map(c => (
-                      <div key={c} className="relative group/color size-5 flex-shrink-0">
+              {/* 시간 템플릿 — 시간표에 드래그해서 배치. 할 일만 보는 화면에서는 숨김. */}
+              {contentView !== "todos" && (
+                <>
+                  <div className="text-[10px] font-medium text-muted-foreground px-2 py-1 uppercase tracking-wide">시간 템플릿</div>
+                  {templates.filter(t => t.kind !== "todo").map(t => (
+                    <div key={t.id} draggable
+                      onDragStart={e => { e.dataTransfer.setData("templateId", t.id); setDragTplId(t.id); }}
+                      onDragEnd={() => { setDragTplId(null); setDropTarget(null); }}
+                      className="group/tpl flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent cursor-grab active:cursor-grabbing transition-colors text-xs select-none">
+                      <span className="size-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: t.color }} />
+                      <span className="flex-1 truncate text-foreground/80">{t.title}</span>
+                      <button
+                        onClick={e => { e.stopPropagation(); onDeleteBlockTemplate(t.id); }}
+                        onMouseDown={e => e.stopPropagation()}
+                        onDragStart={e => { e.stopPropagation(); e.preventDefault(); }}
+                        draggable={false}
+                        title="템플릿 삭제 (기존 블록은 유지)"
+                        className="opacity-0 group-hover/tpl:opacity-100 transition-opacity p-0.5 text-muted-foreground hover:text-destructive flex-shrink-0"
+                      ><X size={11} /></button>
+                    </div>
+                  ))}
+                  {showNewTpl === "time" ? (
+                    <div className="p-2 rounded-lg bg-sidebar-accent space-y-1.5">
+                      <input
+                        autoFocus
+                        value={newTplTitle}
+                        onChange={e => setNewTplTitle(e.target.value)}
+                        placeholder="제목..."
+                        className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
+                      />
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {paletteColors.map(c => (
+                          <div key={c} className="relative group/color size-5 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setNewTplColor(c)}
+                              className={`size-5 rounded-full transition-transform ${newTplColor.toLowerCase() === c.toLowerCase() ? "ring-2 ring-offset-1 ring-offset-sidebar-accent ring-foreground/40 scale-110" : ""}`}
+                              style={{ backgroundColor: c }}
+                              title={c}
+                            />
+                            <button
+                              type="button"
+                              onClick={e => { e.stopPropagation(); onRemovePaletteColor(c); }}
+                              className="absolute -top-1 -right-1 size-3 rounded-full bg-card border border-border text-muted-foreground hover:text-destructive opacity-0 group-hover/color:opacity-100 transition-opacity flex items-center justify-center shadow-sm"
+                              title="팔레트에서 제거"
+                            >
+                              <X size={7} strokeWidth={2.5} />
+                            </button>
+                          </div>
+                        ))}
                         <button
                           type="button"
-                          onClick={() => setNewTplColor(c)}
-                          className={`size-5 rounded-full transition-transform ${newTplColor.toLowerCase() === c.toLowerCase() ? "ring-2 ring-offset-1 ring-offset-sidebar-accent ring-foreground/40 scale-110" : ""}`}
-                          style={{ backgroundColor: c }}
-                          title={c}
-                        />
-                        <button
-                          type="button"
-                          onClick={e => { e.stopPropagation(); onRemovePaletteColor(c); }}
-                          className="absolute -top-1 -right-1 size-3 rounded-full bg-card border border-border text-muted-foreground hover:text-destructive opacity-0 group-hover/color:opacity-100 transition-opacity flex items-center justify-center shadow-sm"
-                          title="팔레트에서 제거"
+                          onClick={() => setShowTplCustomColor(v => !v)}
+                          className={`size-5 rounded-full border flex items-center justify-center transition-colors flex-shrink-0 ${showTplCustomColor ? "border-primary/60 bg-primary/10" : "border-border/70 bg-muted/40 hover:bg-muted"}`}
+                          title="사용자 지정 색상 추가"
                         >
-                          <X size={7} strokeWidth={2.5} />
+                          <Plus size={10} className={showTplCustomColor ? "text-primary" : "text-muted-foreground"} />
                         </button>
                       </div>
-                    ))}
+                      {showTplCustomColor && (
+                        <CustomColorPickerInline
+                          initial={newTplColor}
+                          onAdd={(color) => { setNewTplColor(color); onAddPaletteColor(color); }}
+                          onClose={() => setShowTplCustomColor(false)}
+                        />
+                      )}
+                      <input
+                        value={newTplTags}
+                        onChange={e => setNewTplTags(e.target.value)}
+                        placeholder="태그 (쉼표로 구분)"
+                        className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
+                      />
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={() => {
+                            if (!newTplTitle.trim()) return;
+                            onAddTemplate({
+                              title: newTplTitle.trim(),
+                              color: newTplColor,
+                              tags: newTplTags.split(",").map(t => t.trim()).filter(Boolean),
+                              kind: "time",
+                            });
+                            setNewTplTitle(""); setNewTplTags(""); setShowNewTpl(null);
+                          }}
+                          disabled={!newTplTitle.trim()}
+                          className="flex-1 text-[11px] py-1 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 transition-opacity"
+                        >
+                          추가
+                        </button>
+                        <button onClick={() => setShowNewTpl(null)} className="flex-1 text-[11px] py-1 rounded-lg bg-muted hover:bg-muted/70 transition-colors">
+                          취소
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                     <button
-                      type="button"
-                      onClick={() => setShowTplCustomColor(v => !v)}
-                      className={`size-5 rounded-full border flex items-center justify-center transition-colors flex-shrink-0 ${showTplCustomColor ? "border-primary/60 bg-primary/10" : "border-border/70 bg-muted/40 hover:bg-muted"}`}
-                      title="사용자 지정 색상 추가"
+                      onClick={() => setShowNewTpl("time")}
+                      className="flex items-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent transition-colors"
                     >
-                      <Plus size={10} className={showTplCustomColor ? "text-primary" : "text-muted-foreground"} />
+                      <Plus size={11}/> 새 시간 템플릿
                     </button>
-                  </div>
-                  {showTplCustomColor && (
-                    <CustomColorPickerInline
-                      initial={newTplColor}
-                      onAdd={(color) => { setNewTplColor(color); onAddPaletteColor(color); }}
-                      onClose={() => setShowTplCustomColor(false)}
-                    />
                   )}
-                  <input
-                    value={newTplTags}
-                    onChange={e => setNewTplTags(e.target.value)}
-                    placeholder="태그 (쉼표로 구분)"
-                    className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
-                  />
-                  <div className="flex gap-1.5">
-                    <button
-                      onClick={() => {
-                        if (!newTplTitle.trim()) return;
-                        onAddTemplate({
-                          title: newTplTitle.trim(),
-                          color: newTplColor,
-                          tags: newTplTags.split(",").map(t => t.trim()).filter(Boolean),
-                        });
-                        setNewTplTitle(""); setNewTplTags(""); setShowNewTpl(false);
-                      }}
-                      disabled={!newTplTitle.trim()}
-                      className="flex-1 text-[11px] py-1 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 transition-opacity"
-                    >
-                      추가
-                    </button>
-                    <button onClick={() => setShowNewTpl(false)} className="flex-1 text-[11px] py-1 rounded-lg bg-muted hover:bg-muted/70 transition-colors">
-                      취소
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setShowNewTpl(true)}
-                  className="flex items-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent transition-colors"
-                >
-                  <Plus size={11}/> 새 템플릿
-                </button>
+                </>
               )}
 
-              {/* Schedule templates */}
+              {/* 일정 템플릿 — 할 일 열에 드래그해서 추가. 시간표만 보는 화면에서는 숨김. 시간대 필드 없음. */}
+              {contentView !== "grid" && (
+                <div className={contentView !== "todos" ? "mt-3 pt-2 border-t border-sidebar-border" : ""}>
+                  <div className="text-[10px] font-medium text-muted-foreground px-2 py-1 uppercase tracking-wide">일정 템플릿</div>
+                  {templates.filter(t => t.kind === "todo").map(t => (
+                    <div key={t.id} draggable
+                      onDragStart={e => {
+                        // 시간 그리드 드롭 로직이 templateId 를 소비하지 않도록 todoTemplateId 를 별도 키로 넘긴다.
+                        e.dataTransfer.setData("todoTemplateId", t.id);
+                        e.dataTransfer.setData("todoTitle", t.title);
+                      }}
+                      className="group/tpl flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-sidebar-accent cursor-grab active:cursor-grabbing transition-colors text-xs select-none">
+                      <span className="size-2.5 rounded-sm flex-shrink-0 bg-muted-foreground/40" />
+                      <span className="flex-1 truncate text-foreground/80">{t.title}</span>
+                      <button
+                        onClick={e => { e.stopPropagation(); onDeleteBlockTemplate(t.id); }}
+                        onMouseDown={e => e.stopPropagation()}
+                        onDragStart={e => { e.stopPropagation(); e.preventDefault(); }}
+                        draggable={false}
+                        title="템플릿 삭제"
+                        className="opacity-0 group-hover/tpl:opacity-100 transition-opacity p-0.5 text-muted-foreground hover:text-destructive flex-shrink-0"
+                      ><X size={11} /></button>
+                    </div>
+                  ))}
+                  {showNewTpl === "todo" ? (
+                    <div className="p-2 rounded-lg bg-sidebar-accent space-y-1.5">
+                      <input
+                        autoFocus
+                        value={newTplTitle}
+                        onChange={e => setNewTplTitle(e.target.value)}
+                        placeholder="제목..."
+                        className="w-full text-xs px-2 py-1 rounded bg-card border border-border outline-none focus:ring-1 focus:ring-ring"
+                        onKeyDown={e => {
+                          if (e.key === "Enter" && newTplTitle.trim()) {
+                            onAddTemplate({ title: newTplTitle.trim(), color: "#94A3B8", tags: [], kind: "todo" });
+                            setNewTplTitle(""); setShowNewTpl(null);
+                          } else if (e.key === "Escape") {
+                            setNewTplTitle(""); setShowNewTpl(null);
+                          }
+                        }}
+                      />
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={() => {
+                            if (!newTplTitle.trim()) return;
+                            onAddTemplate({ title: newTplTitle.trim(), color: "#94A3B8", tags: [], kind: "todo" });
+                            setNewTplTitle(""); setShowNewTpl(null);
+                          }}
+                          disabled={!newTplTitle.trim()}
+                          className="flex-1 text-[11px] py-1 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 transition-opacity"
+                        >추가</button>
+                        <button onClick={() => setShowNewTpl(null)} className="flex-1 text-[11px] py-1 rounded-lg bg-muted hover:bg-muted/70 transition-colors">취소</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setShowNewTpl("todo")}
+                      className="flex items-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent transition-colors"
+                    >
+                      <Plus size={11}/> 새 일정 템플릿
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* 저장된 일정 (시간표 전체 세트) — 할 일만 보는 화면에서는 숨김. */}
+              {contentView !== "todos" && (
               <div className="mt-3 pt-2 border-t border-sidebar-border">
                 <div className="flex items-center justify-between px-2 py-1">
                   <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">저장된 일정</div>
@@ -3081,6 +3181,7 @@ function CalendarSection({
                   </button>
                 )}
               </div>
+              )}
             </div>
           )}
         </div>
@@ -3090,14 +3191,28 @@ function CalendarSection({
         {calView === "month" ? (
           renderMonthGrid()
         ) : (
-          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          <div ref={bothContainerRef} className="flex-1 flex flex-col overflow-hidden min-w-0">
             {contentView !== "todos" && (
-              <div className={contentView === "both" ? "flex-[3] flex overflow-hidden min-h-0" : "flex-1 flex overflow-hidden min-h-0"}>
+              <div
+                className="flex overflow-hidden min-h-0"
+                style={contentView === "both" ? { flex: `${splitRatio} 1 0`, minHeight: 0 } : { flex: "1 1 0" }}
+              >
                 {calMode === "grid" ? renderTimeGrid(viewDays) : renderListView()}
               </div>
             )}
+            {contentView === "both" && (
+              /* 상·하 영역 사이 리사이즈 핸들. 마우스 다운 후 이동에 따라 splitRatio 갱신. */
+              <div
+                onMouseDown={startSplitterDrag}
+                className="h-1.5 flex-shrink-0 bg-border/40 hover:bg-primary/40 active:bg-primary/60 cursor-row-resize transition-colors"
+                title="드래그해서 크기 조절"
+              />
+            )}
             {contentView !== "grid" && (
-              <div className={contentView === "both" ? "flex-[2] border-t border-border overflow-hidden min-h-0" : "flex-1 overflow-hidden min-h-0"}>
+              <div
+                className="overflow-hidden min-h-0"
+                style={contentView === "both" ? { flex: `${1 - splitRatio} 1 0`, minHeight: 0 } : { flex: "1 1 0" }}
+              >
                 <TodoPanel
                   todos={todos}
                   viewDays={viewDays}
@@ -3107,6 +3222,9 @@ function CalendarSection({
                   onUpdateTitle={onUpdateTodoTitle}
                   deadlines={deadlines}
                   onToggleDeadline={onToggleDeadline}
+                  showDayHeader={contentView === "todos"}
+                  onGoPrev={goPrev}
+                  onGoNext={goNext}
                 />
               </div>
             )}
@@ -3183,6 +3301,7 @@ function CalendarSection({
 // 각 컬럼 하단 입력창. 실시간 편집은 title 클릭 → inline input.
 function TodoPanel({
   todos, viewDays, onAdd, onToggle, onDelete, onUpdateTitle, deadlines, onToggleDeadline,
+  showDayHeader, onGoPrev, onGoNext,
 }: {
   todos: Todo[];
   viewDays: Date[];
@@ -3192,6 +3311,9 @@ function TodoPanel({
   onUpdateTitle: (id: string, title: string) => void;
   deadlines: Deadline[];
   onToggleDeadline: (id: string) => void;
+  showDayHeader?: boolean;
+  onGoPrev?: () => void;
+  onGoNext?: () => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -3202,74 +3324,139 @@ function TodoPanel({
     onAdd({ title: v, date: dateStr });
     setDrafts(d => ({ ...d, [dateStr]: "" }));
   };
+  // 시간표 블록과 시각적으로 통일 — 마감/할 일 모두 색상 스트라이프가 있는 블록 형태.
+  // 마감은 빨강 계열, 할 일은 subtle sky 톤. 완료 시 회색화.
+  const TODO_COLOR = "#5AA9E6";
+  const DEADLINE_COLOR = "#EF4444";
   return (
-    <div className="h-full flex overflow-hidden">
-      <div className="w-12 flex-shrink-0 flex items-start justify-end pt-2 pr-2 text-[9px] text-muted-foreground select-none">일정</div>
-      {viewDays.map((day) => {
-        const dateStr = toDateStr(day);
-        const dayDeadlines = deadlines.filter(d => d.dueDate === dateStr);
-        const dayTodos = todos.filter(t => t.date === dateStr || (t.endDate && dateStr >= t.date && dateStr <= t.endDate));
-        return (
-          <div key={dateStr} className="flex-1 border-l border-border overflow-y-auto min-w-0 p-2 space-y-1">
-            {/* 마감 먼저(상단·빨강) */}
-            {dayDeadlines.map(d => (
-              <button
-                key={`dl-${d.id}`}
-                onClick={() => onToggleDeadline(d.id)}
-                title={d.completed ? "완료 해제" : "완료 처리"}
-                className={`w-full text-left text-[11px] px-2 py-1 rounded transition-colors block truncate ${d.completed ? "bg-muted/40 text-muted-foreground line-through" : "bg-red-100 text-red-700 hover:bg-red-200"}`}
-              >{d.title}</button>
-            ))}
-            {/* Todo — 흰 카드 + 체크박스 + 인라인 편집 + 우측 삭제 */}
-            {dayTodos.map(t => (
-              <div key={t.id}
-                className={`group/todo flex items-center gap-2 px-2 py-1 rounded border bg-card text-[11px] hover:border-primary/40 ${t.completed ? "opacity-60" : ""}`}
-              >
-                <button
-                  onClick={() => onToggle(t.id)}
-                  className="flex-shrink-0"
-                  title={t.completed ? "완료 해제" : "완료 처리"}
-                >
-                  {t.completed
-                    ? <CheckCircle2 size={13} className="text-primary" />
-                    : <Circle size={13} className="text-muted-foreground" />}
-                </button>
-                {editingId === t.id ? (
-                  <input
-                    autoFocus
-                    value={editingDraft}
-                    onChange={e => setEditingDraft(e.target.value)}
-                    onBlur={() => { onUpdateTitle(t.id, editingDraft.trim() || t.title); setEditingId(null); }}
-                    onKeyDown={e => {
-                      if (e.key === "Enter") { onUpdateTitle(t.id, editingDraft.trim() || t.title); setEditingId(null); }
-                      else if (e.key === "Escape") setEditingId(null);
-                    }}
-                    className="flex-1 min-w-0 bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-1"
-                  />
-                ) : (
-                  <button
-                    onClick={() => { setEditingDraft(t.title); setEditingId(t.id); }}
-                    className={`flex-1 min-w-0 text-left truncate ${t.completed ? "line-through" : ""}`}
-                  >{t.title}</button>
-                )}
-                <button
-                  onClick={() => onDelete(t.id)}
-                  className="opacity-0 group-hover/todo:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-                  title="삭제"
-                ><X size={11} /></button>
+    <div className="h-full flex flex-col overflow-hidden">
+      {showDayHeader && (
+        /* 시간표 뷰의 요일/날짜 헤더와 폭·톤을 맞춤. 좌/우 끝 chevron 도 동일. */
+        <div className="relative flex border-b border-border flex-shrink-0 bg-card items-stretch">
+          {onGoPrev && (
+            <button
+              onClick={onGoPrev}
+              className="w-12 flex-shrink-0 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+              title="이전"
+            ><ChevronLeft size={16} /></button>
+          )}
+          {!onGoPrev && <div className="w-12 flex-shrink-0" />}
+          {viewDays.map((day, i) => {
+            const isToday = toDateStr(day) === TODAY_STR;
+            const dow = day.getDay();
+            return (
+              <div key={i} className="flex-1 text-center py-2 min-w-0">
+                <div className={`text-[10px] ${viewDays.length > 1 && dow === 0 ? "text-red-400" : viewDays.length > 1 && dow === 6 ? "text-blue-400" : "text-muted-foreground"}`}>
+                  {DAYS_KO[dow]}
+                </div>
+                <div className={`inline-flex items-center justify-center w-7 h-7 mt-0.5 rounded-full text-xs font-medium ${isToday ? "bg-primary text-primary-foreground" : "text-foreground"}`}>
+                  {day.getDate()}
+                </div>
               </div>
-            ))}
-            {/* 새 todo 입력 */}
-            <input
-              value={drafts[dateStr] ?? ""}
-              onChange={e => setDrafts(d => ({ ...d, [dateStr]: e.target.value }))}
-              onKeyDown={e => { if (e.key === "Enter") commitDraft(dateStr); }}
-              placeholder="+ 새 일정"
-              className="w-full px-2 py-1 rounded text-[11px] bg-transparent border border-dashed border-border/60 hover:border-primary/40 focus:border-primary outline-none placeholder:text-muted-foreground/60"
-            />
-          </div>
-        );
-      })}
+            );
+          })}
+          {onGoNext && (
+            <button
+              onClick={onGoNext}
+              className="absolute right-0 top-0 bottom-0 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors rounded-l"
+              title="다음"
+            ><ChevronRight size={16} /></button>
+          )}
+        </div>
+      )}
+      <div className="flex-1 flex overflow-hidden">
+        <div className="w-12 flex-shrink-0 flex items-start justify-end pt-2 pr-2 text-[9px] text-muted-foreground select-none">일정</div>
+        {viewDays.map((day) => {
+          const dateStr = toDateStr(day);
+          const dayDeadlines = deadlines.filter(d => d.dueDate === dateStr);
+          const dayTodos = todos.filter(t => t.date === dateStr || (t.endDate && dateStr >= t.date && dateStr <= t.endDate));
+          return (
+            <div key={dateStr}
+              onDragOver={e => {
+                // 일정 템플릿(todoTemplateId) 을 이 컬럼에 놓을 수 있게 허용.
+                if (e.dataTransfer.types.includes("todoTemplateId") || e.dataTransfer.types.includes("todoTitle")) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "copy";
+                }
+              }}
+              onDrop={e => {
+                const title = e.dataTransfer.getData("todoTitle");
+                if (title) {
+                  e.preventDefault();
+                  onAdd({ title, date: dateStr });
+                }
+              }}
+              className="flex-1 border-l border-border overflow-y-auto min-w-0 p-2 space-y-1.5">
+              {/* 마감 — 시간표 블록과 동일한 스트라이프 + 이름 배치. 빨강 계열. */}
+              {dayDeadlines.map(d => (
+                <div key={`dl-${d.id}`}
+                  className={`group/dl flex items-center gap-2 px-2 py-1.5 rounded-md border text-[11px] transition-colors ${d.completed ? "bg-muted/40 border-transparent opacity-60" : "bg-red-50 border-red-200 hover:border-red-300"}`}
+                >
+                  <button
+                    onClick={() => onToggleDeadline(d.id)}
+                    className="flex-shrink-0"
+                    title={d.completed ? "완료 해제" : "완료 처리"}
+                  >
+                    {d.completed
+                      ? <CheckCircle2 size={13} className="text-red-500" />
+                      : <Circle size={13} className="text-red-400" />}
+                  </button>
+                  <span className="w-0.5 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: DEADLINE_COLOR }} />
+                  <span className={`flex-1 min-w-0 truncate ${d.completed ? "line-through text-muted-foreground" : "text-red-700"}`}>{d.title}</span>
+                </div>
+              ))}
+              {/* 할 일 — 시간표 블록과 동일한 형태(왼쪽 색 스트라이프 + 제목 + 우측 삭제). */}
+              {dayTodos.map(t => (
+                <div key={t.id}
+                  className={`group/todo flex items-center gap-2 px-2 py-1.5 rounded-md border text-[11px] transition-colors ${t.completed ? "bg-muted/40 border-transparent opacity-60" : "bg-card border-border hover:border-primary/40"}`}
+                >
+                  <button
+                    onClick={() => onToggle(t.id)}
+                    className="flex-shrink-0"
+                    title={t.completed ? "완료 해제" : "완료 처리"}
+                  >
+                    {t.completed
+                      ? <CheckCircle2 size={13} style={{ color: TODO_COLOR }} />
+                      : <Circle size={13} className="text-muted-foreground" />}
+                  </button>
+                  <span className="w-0.5 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: TODO_COLOR }} />
+                  {editingId === t.id ? (
+                    <input
+                      autoFocus
+                      value={editingDraft}
+                      onChange={e => setEditingDraft(e.target.value)}
+                      onBlur={() => { onUpdateTitle(t.id, editingDraft.trim() || t.title); setEditingId(null); }}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") { onUpdateTitle(t.id, editingDraft.trim() || t.title); setEditingId(null); }
+                        else if (e.key === "Escape") setEditingId(null);
+                      }}
+                      className="flex-1 min-w-0 bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-1"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => { setEditingDraft(t.title); setEditingId(t.id); }}
+                      className={`flex-1 min-w-0 text-left truncate ${t.completed ? "line-through text-muted-foreground" : ""}`}
+                    >{t.title}</button>
+                  )}
+                  <button
+                    onClick={() => onDelete(t.id)}
+                    className="opacity-0 group-hover/todo:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                    title="삭제"
+                  ><X size={11} /></button>
+                </div>
+              ))}
+              {/* 새 할 일 입력 */}
+              <input
+                value={drafts[dateStr] ?? ""}
+                onChange={e => setDrafts(d => ({ ...d, [dateStr]: e.target.value }))}
+                onKeyDown={e => { if (e.key === "Enter") commitDraft(dateStr); }}
+                placeholder="+ 새 할 일"
+                className="w-full px-2 py-1 rounded text-[11px] bg-transparent border border-dashed border-border/60 hover:border-primary/40 focus:border-primary outline-none placeholder:text-muted-foreground/60"
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

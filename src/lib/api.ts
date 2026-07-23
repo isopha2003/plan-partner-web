@@ -55,20 +55,29 @@ export function rowToBlock(row: any) {
 }
 
 // ── block_templates ─────────────────────────────────────────────
+// kind='time' 은 기존 시간대별 블록 템플릿, 'todo' 는 시간대 없이 할 일 목록에 붙이는 템플릿.
+export type TemplateKind = "time" | "todo";
 export async function fetchTemplates() {
   const db = await getDb();
   const rows = await db.select<any[]>("SELECT * FROM block_templates ORDER BY created_at");
-  return rows.map(t => ({ id: t.id, title: t.title, color: t.color, tags: jsonOrEmpty(t.tags) }));
+  return rows.map(t => ({
+    id: t.id,
+    title: t.title,
+    color: t.color,
+    tags: jsonOrEmpty(t.tags),
+    kind: (t.kind === "todo" ? "todo" : "time") as TemplateKind,
+  }));
 }
 
-export async function createTemplate(t: { title: string; color: string; tags: string[] }) {
+export async function createTemplate(t: { title: string; color: string; tags: string[]; kind?: TemplateKind }) {
   const db = await getDb();
   const id = uuid();
+  const kind: TemplateKind = t.kind === "todo" ? "todo" : "time";
   await db.execute(
-    "INSERT INTO block_templates (id, title, color, tags) VALUES (?, ?, ?, ?)",
-    [id, t.title, t.color, JSON.stringify(t.tags)]
+    "INSERT INTO block_templates (id, title, color, tags, kind) VALUES (?, ?, ?, ?, ?)",
+    [id, t.title, t.color, JSON.stringify(t.tags), kind]
   );
-  return { id, title: t.title, color: t.color, tags: t.tags };
+  return { id, title: t.title, color: t.color, tags: t.tags, kind };
 }
 
 // 블록 템플릿 삭제 — 이 템플릿으로 만들어진 기존 블록은 그대로 남고 template_id만
