@@ -3582,17 +3582,19 @@ function CalendarSection({
            바깥 클릭 리스너가 닫음(useEffect). mousedown 시 setCtxMenu(null) 이 발화하니
            메뉴 내부 클릭엔 stopPropagation 로 닫힘 방지. */}
       {ctxMenu && (
+        /* 폰트/아이콘/패딩 모두 캘린더 블록 셀(text-[9px]) 과 같은 톤으로 맞춰서
+           앱 다른 UI 와 위화감 없게. leading-none 으로 line-height 여유 공간도 제거. */
         <div
           onMouseDown={e => e.stopPropagation()}
-          className="fixed z-50 min-w-[96px] bg-card border border-border rounded-md shadow-md p-0.5 text-[10px]"
+          className="fixed z-50 min-w-[72px] bg-card border border-border rounded-md shadow-md p-0.5 text-[9px] leading-none"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
         >
-          <div className="px-1.5 py-0.5 text-[8px] text-muted-foreground uppercase tracking-wide">
+          <div className="px-1 py-0.5 text-[8px] text-muted-foreground tracking-wide">
             {selectedIds.size}개
           </div>
           <button
             onClick={() => { setShowMultiRepeat(true); setCtxMenu(null); }}
-            className="w-full text-left px-1.5 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1"
+            className="w-full text-left px-1 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1"
           >↻ 반복</button>
           <button
             onClick={() => {
@@ -3600,16 +3602,16 @@ function CalendarSection({
               if (picked.length > 0) setBlockClipboard(picked);
               setCtxMenu(null);
             }}
-            className="w-full text-left px-1.5 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1"
-          ><Copy size={10} /> 복사</button>
+            className="w-full text-left px-1 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1"
+          ><Copy size={9} /> 복사</button>
           <button
             onClick={() => {
               onPasteBlocks(blockClipboard, toDateStr(viewDate));
               setCtxMenu(null);
             }}
             disabled={blockClipboard.length === 0}
-            className="w-full text-left px-1.5 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1 disabled:opacity-40 disabled:hover:bg-transparent"
-          ><Plus size={10} /> 붙임</button>
+            className="w-full text-left px-1 py-0.5 rounded hover:bg-muted transition-colors flex items-center gap-1 disabled:opacity-40 disabled:hover:bg-transparent"
+          ><Plus size={9} /> 붙임</button>
           <div className="h-px bg-border my-0.5" />
           <button
             onClick={() => {
@@ -3618,8 +3620,8 @@ function CalendarSection({
               setSelectedIds(new Set());
               setCtxMenu(null);
             }}
-            className="w-full text-left px-1.5 py-0.5 rounded hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-1"
-          ><Trash2 size={10} /> 삭제</button>
+            className="w-full text-left px-1 py-0.5 rounded hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-1"
+          ><Trash2 size={9} /> 삭제</button>
         </div>
       )}
 
