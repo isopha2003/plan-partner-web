@@ -132,11 +132,23 @@ export function getDb(): Promise<Database> {
   if (!dbPromise) {
     const p: Promise<Database> = (async () => {
       const db = await Database.load("sqlite:planner.db");
-      // 0) 외래키 제약 활성화 — 기본 OFF라 켜지 않으면 스키마의 ON DELETE CASCADE/SET NULL이
-      //    전부 no-op. 폴더/템플릿/부모블록을 지워도 자식 로우가 그대로 남아 UI에 고아 상태로
-      //    표시되거나(예: folder_id가 죽은 폴더를 가리키는 노트가 모든 뷰에서 안 보임) 이후
-      //    삽입에서 이상 상태가 됨. 켜기만 해도 이후 삭제부터 제대로 동작.
-      //    (기존에 이미 남은 고아는 SQLite가 후속 수정 시에만 체크하므로 즉시 실패하지 않음.)
+      // 0) SQLite 동시성/일관성 프래그마.
+      //    - journal_mode=WAL: DB 파일 레벨 설정이라 한 번만 켜두면 이후 모든 커넥션이 WAL로
+      //      동작. 리더가 라이터를 막지 않아 UI가 백그라운드 저장 중에도 자유롭게 SELECT.
+      //    - busy_timeout=5000: 라이터-라이터 충돌 시 즉시 SQLITE_BUSY(code 5, "database is
+      //      locked") 로 실패하지 말고 최대 5초까지 자동 대기 후 재시도. tauri-plugin-sql의
+      //      커넥션 풀이 여러 커넥션을 쓰기 때문에 BEGIN 이 걸린 커넥션과 다른 커넥션이
+      //      동시에 쓰기를 시도하면 예전엔 "database is locked" 로 즉사했음(예: "일정 템플릿
+      //      적용" 중 자동 저장이 겹칠 때). WAL은 DB 지속 설정이라 확실히 반영되지만,
+      //      busy_timeout은 per-connection이라 이 커넥션에만 걸림 — 그래도 없는 것보단 나음.
+      //    - foreign_keys=ON: 스키마의 ON DELETE CASCADE/SET NULL을 실제로 동작시킴. 기본이
+      //      OFF라 켜지 않으면 폴더/템플릿/부모블록 삭제 시 자식 로우가 그대로 남아 유령됨.
+      //      per-connection 이라는 한계가 있지만 대부분 순차 실행 경로에서는 같은 커넥션이
+      //      재사용되므로 실전 방어에 충분. (기존 고아는 후속 수정 시에만 체크되어 즉사 X.)
+      try { await db.execute("PRAGMA journal_mode = WAL"); }
+      catch (e) { console.error("PRAGMA journal_mode WAL failed", e); }
+      try { await db.execute("PRAGMA busy_timeout = 5000"); }
+      catch (e) { console.error("PRAGMA busy_timeout failed", e); }
       try { await db.execute("PRAGMA foreign_keys = ON"); }
       catch (e) { console.error("PRAGMA foreign_keys ON failed", e); }
       // 1) 구버전 notes 테이블이 있으면 먼저 컬럼 업그레이드. SCHEMA의 CREATE INDEX가

@@ -212,42 +212,37 @@ export async function insertBlocksBulk(blocks: any[]) {
   if (blocks.length === 0) return [];
   const db = await getDb();
   const ids: string[] = [];
-  // SQLite는 multi-row INSERT를 지원하지만 tauri-plugin-sql의 파라미터 바인딩과 잘 안 맞아서
-  // 안전하게 한 건씩 처리 — 개인 앱 규모에선 성능 영향 무시할 만함.
-  // 전체를 트랜잭션으로 감싸서 중간 실패 시 부분 삽입을 방지(반복 인스턴스가 절반만
-  // 만들어져 나머지 저장 재시도가 UI 상태와 어긋나는 문제를 원천 차단).
-  await db.execute("BEGIN TRANSACTION");
-  try {
-    for (const block of blocks) {
-      const id = uuid();
-      ids.push(id);
-      await db.execute(
-        `INSERT INTO blocks (
-          id, template_id, parent_block_id, title, color, date, start_time, end_time,
-          completed, completed_at, memo, next_block_id, repeat_group_id, repeat_rule
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          id,
-          block.templateId ?? null,
-          block.parentBlockId ?? null,
-          block.title,
-          block.color,
-          block.date,
-          toTime(block.startH, block.startM),
-          toTime(block.endH, block.endM),
-          block.completed ? 1 : 0,
-          block.completed ? new Date().toISOString() : null,
-          block.memo ?? "",
-          block.nextBlockId ?? null,
-          block.repeatGroupId ?? null,
-          block.repeat ? JSON.stringify(block.repeat) : null,
-        ]
-      );
-    }
-    await db.execute("COMMIT");
-  } catch (e) {
-    try { await db.execute("ROLLBACK"); } catch {}
-    throw e;
+  // 예전엔 BEGIN TRANSACTION / COMMIT 로 감쌌지만, tauri-plugin-sql 의 커넥션 풀이 여러
+  // 커넥션을 쓰기 때문에 트랜잭션이 실제로는 걸리지 않고 오히려 BEGIN 이 잡아둔 커넥션의
+  // write-lock 이 길게 유지돼 동시 다른 write 가 "database is locked" 로 실패했음
+  // (예: "일정 템플릿 적용" 중 자동 저장이 겹칠 때). 개별 INSERT 로 전환 — 각 INSERT 는
+  // SQLite 의 암시적 자동 커밋 트랜잭션이라 원자성은 유지되고, 여러 INSERT 사이 다른
+  // write 가 끼어들어도 조금씩 순차 진행. 중간 실패는 호출자가 refetch 로 화해.
+  for (const block of blocks) {
+    const id = uuid();
+    ids.push(id);
+    await db.execute(
+      `INSERT INTO blocks (
+        id, template_id, parent_block_id, title, color, date, start_time, end_time,
+        completed, completed_at, memo, next_block_id, repeat_group_id, repeat_rule
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        block.templateId ?? null,
+        block.parentBlockId ?? null,
+        block.title,
+        block.color,
+        block.date,
+        toTime(block.startH, block.startM),
+        toTime(block.endH, block.endM),
+        block.completed ? 1 : 0,
+        block.completed ? new Date().toISOString() : null,
+        block.memo ?? "",
+        block.nextBlockId ?? null,
+        block.repeatGroupId ?? null,
+        block.repeat ? JSON.stringify(block.repeat) : null,
+      ]
+    );
   }
   const placeholders = ids.map(() => "?").join(",");
   const rows = await db.select<any[]>(`${BLOCK_SELECT} WHERE b.id IN (${placeholders})`, ids);
@@ -448,20 +443,15 @@ export async function moveNoteToFolder(id: string, folderId: string | null): Pro
 }
 
 // 사용자 지정 순서 저장 — orderedIds의 인덱스를 그대로 sort_order로 부여.
-// 트랜잭션으로 감싸서 중간 실패 시 부분 반영을 방지(안 그러면 일부 노트만 새 순서를
-// 갖게 되어 다음 로드 때 사용자가 봤던 순서와 다른 이상한 정렬이 됨).
+// 이전엔 BEGIN TRANSACTION 으로 감쌌지만 tauri-plugin-sql 풀이 여러 커넥션을 써서 실제
+// 트랜잭션이 안 걸리는 반면, BEGIN 이 잡은 write-lock 때문에 동시 다른 write 가
+// "database is locked" 로 실패했음. 개별 UPDATE 로 전환. 중간에 하나 실패해도 나머지는
+// 반영되고 사용자 순서는 부분적으로만 유지 — 다음 로드 때 이상하지만 데이터 유실은 아님.
 export async function reorderNotes(orderedIds: string[]): Promise<void> {
   if (orderedIds.length === 0) return;
   const db = await getDb();
-  await db.execute("BEGIN TRANSACTION");
-  try {
-    for (let i = 0; i < orderedIds.length; i++) {
-      await db.execute("UPDATE notes SET sort_order = ? WHERE id = ?", [i, orderedIds[i]]);
-    }
-    await db.execute("COMMIT");
-  } catch (e) {
-    try { await db.execute("ROLLBACK"); } catch {}
-    throw e;
+  for (let i = 0; i < orderedIds.length; i++) {
+    await db.execute("UPDATE notes SET sort_order = ? WHERE id = ?", [i, orderedIds[i]]);
   }
 }
 
