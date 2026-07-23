@@ -3677,13 +3677,13 @@ function TodoPanel({
                         if (e.key === "Enter") { onUpdateTitle(t.id, editingDraft.trim() || t.title); setEditingId(null); }
                         else if (e.key === "Escape") setEditingId(null);
                       }}
-                      className="w-full bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-2 py-1.5 font-semibold"
+                      className="w-full bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-1.5 py-1 text-[10px] font-semibold"
                       style={{ color: t.color }}
                     />
                   ) : (
                     <button
                       onClick={() => { setEditingDraft(t.title); setEditingId(t.id); }}
-                      className={`w-full min-w-0 text-left truncate px-2 py-1.5 font-semibold ${t.completed ? "line-through" : ""}`}
+                      className={`w-full min-w-0 text-left truncate px-1.5 py-1 text-[10px] font-semibold ${t.completed ? "line-through" : ""}`}
                       style={{ color: t.color }}
                     >{t.title}</button>
                   )}
