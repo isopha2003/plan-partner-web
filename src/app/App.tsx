@@ -2849,9 +2849,12 @@ function CalendarSection({
     const totalRows = cells.length / 7;
 
     return (
-      <div className="flex-1 overflow-auto min-w-0">
+      /* 월 뷰는 스크롤 없이 남은 공간을 꽉 채움. 각 셀 높이는 (총높이 - 요일헤더) / totalRows 로
+         균등 분배 — 글씨 크기(html zoom) 를 바꿔도 flex/1fr 이 zoom 좌표계 안에서 재계산되므로
+         자동으로 화면에 맞게 조정됨. */
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0 min-h-0">
         {/* Day of week headers — 좌우 끝에 이전/다음 화살표를 겹쳐 얹어 네비게이션. */}
-        <div className="relative grid grid-cols-7 border-b border-border flex-shrink-0 bg-card sticky top-0 z-10">
+        <div className="relative grid grid-cols-7 border-b border-border flex-shrink-0 bg-card">
           {["일","월","화","수","목","금","토"].map((d, i) => (
             <div key={d} className={`text-center text-[10px] py-2 font-medium ${i===0?"text-red-400":i===6?"text-blue-400":"text-muted-foreground"}`}>{d}</div>
           ))}
@@ -2867,10 +2870,13 @@ function CalendarSection({
           ><ChevronRight size={14} /></button>
         </div>
 
-        <div className="grid grid-cols-7">
+        <div
+          className="grid grid-cols-7 flex-1 min-h-0"
+          style={{ gridTemplateRows: `repeat(${totalRows}, minmax(0, 1fr))` }}
+        >
           {cells.map((day, i) => {
             if (!day) return (
-              <div key={`e-${i}`} className={`min-h-[100px] bg-muted/5 ${i%7!==6?"border-r":""} ${Math.floor(i/7)<totalRows-1?"border-b":""} border-border`} />
+              <div key={`e-${i}`} className={`min-h-0 overflow-hidden bg-muted/5 ${i%7!==6?"border-r":""} ${Math.floor(i/7)<totalRows-1?"border-b":""} border-border`} />
             );
             const dateStr = toDateStr(day);
             const isToday = dateStr === TODAY_STR;
@@ -2887,7 +2893,7 @@ function CalendarSection({
               <div key={dateStr}
                 onMouseEnter={() => setMonthHoverDate(dateStr)}
                 onMouseLeave={() => setMonthHoverDate(prev => prev === dateStr ? null : prev)}
-                className={`min-h-[100px] p-1.5 relative ${col!==6?"border-r border-border":""} ${row<totalRows-1?"border-b border-border":""} ${isToday?"ring-1 ring-inset ring-primary/40":""} ${isFuture?"bg-muted/5":""}`}
+                className={`min-h-0 min-w-0 overflow-hidden p-1.5 relative flex flex-col ${col!==6?"border-r border-border":""} ${row<totalRows-1?"border-b border-border":""} ${isToday?"ring-1 ring-inset ring-primary/40":""} ${isFuture?"bg-muted/5":""}`}
                 onClick={e => {
                   // 셀 배경 직접 클릭 → 새 todo 인라인 입력 오픈.
                   if (e.target !== e.currentTarget) return;
