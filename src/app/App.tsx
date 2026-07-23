@@ -1887,9 +1887,11 @@ function CalendarSection({
   // - 빈 영역 mousedown → 드래그: 마퀴 사각형 (교차하는 블록 모두 선택)
   // - Esc: 해제
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  // 진행 중인 마퀴 — dayIdx 는 어느 요일 컬럼에서 시작했는지(마퀴는 한 컬럼 내부에서만 그어짐).
-  // startY/curY 는 그 컬럼의 상단 기준 픽셀 오프셋(스크롤 컨테이너 내부 좌표).
-  const [marquee, setMarquee] = useState<{ dayIdx: number; startY: number; curY: number } | null>(null);
+  // 진행 중인 마퀴 — 좌표는 timeGridRef 콘텐츠 상대 좌표계에 저장.
+  // 컨테이너 스크롤이 발생해도 콘텐츠 좌표는 안정적이라 마퀴 앵커가 튀지 않고,
+  // 그리드 전체(여러 요일 컬럼 + 24시간 세로 축) 어느 지점이든 자유롭게 드래그 가능.
+  const [marquee, setMarquee] = useState<{ startX: number; startY: number; curX: number; curY: number } | null>(null);
+  const timeGridRef = useRef<HTMLDivElement>(null);
   // 우클릭 컨텍스트 메뉴 — 화면 절대 좌표.
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // 다중 반복 설정 모달 열림 여부.
@@ -1905,46 +1907,70 @@ function CalendarSection({
   const selectedBlocks = topLevelBlocks.filter(b => selectedIds.has(b.id));
 
   // 마우스 이동에 따라 마퀴가 확장되도록 document 레벨 리스너 부착.
-  // dayIdx 는 시작 시 결정된 컬럼에서만 계산되고, 세로 오프셋은 requestAnimationFrame 스로틀 없이
-  // 그대로 반영해도 60fps 렌더 압박이 크지 않음(단순 setState).
+  // 좌표는 timeGridRef 콘텐츠 좌표계로 변환해서 저장 — 스크롤이 발생해도 rect.top 이 변하며
+  // 그 변화가 clientY 변환에 자동 반영되므로 앵커/추적 모두 안정적.
+  // 컨테이너 스크롤 이벤트도 동시에 리스닝해서, 마우스는 가만히 있고 스크롤만 발생해도 마퀴 크기가
+  // 자연스럽게 갱신되도록(마우스가 지나가는 지점의 콘텐츠 y 가 스크롤에 따라 변하는 걸 반영).
   useEffect(() => {
     if (!marquee) return;
+    let lastClientX = 0, lastClientY = 0;
+    const toContent = (cx: number, cy: number) => {
+      if (!timeGridRef.current) return { x: cx, y: cy };
+      const r = timeGridRef.current.getBoundingClientRect();
+      return { x: cx - r.left, y: cy - r.top };
+    };
     const onMove = (e: MouseEvent) => {
-      // 시작 지점에서의 컬럼 상단 좌표를 담을 방법이 없어서, 대신 startY 를 절대 y 로 저장한 뒤
-      // curY 도 절대 y 로 유지. 렌더 시 실제 element 의 rect 로 상대 좌표를 다시 계산.
-      setMarquee(m => m ? { ...m, curY: e.clientY } : m);
+      lastClientX = e.clientX; lastClientY = e.clientY;
+      const p = toContent(e.clientX, e.clientY);
+      setMarquee(m => m ? { ...m, curX: p.x, curY: p.y } : m);
+    };
+    const onScroll = () => {
+      if (lastClientX === 0 && lastClientY === 0) return;
+      const p = toContent(lastClientX, lastClientY);
+      setMarquee(m => m ? { ...m, curX: p.x, curY: p.y } : m);
     };
     const onUp = (e: MouseEvent) => {
-      // 마퀴 종료 시 dataset-marquee-column 속성이 붙은 요소 중 dayIdx 일치하는 것을 찾아 그 컬럼의
-      // 화면 좌표계와 마퀴 절대 좌표를 비교, 교차 블록을 선택 세트에 담음.
-      const col = document.querySelector(`[data-marquee-column="${marquee.dayIdx}"]`);
-      if (col) {
-        const rect = col.getBoundingClientRect();
-        const yA = Math.max(0, Math.min(marquee.startY, marquee.curY) - rect.top);
-        const yB = Math.max(0, Math.max(marquee.startY, marquee.curY) - rect.top);
-        // 이 컬럼의 dateStr 는 dayIdx 로 데이터셋에 붙여둠(data-date).
-        const dateStr = (col as HTMLElement).dataset.date;
-        if (dateStr) {
-          const hits = new Set<string>();
-          // 이미 Ctrl 눌린 상태로 마퀴 시작하면 기존 선택에 추가, 아니면 대체.
-          const additive = e.ctrlKey || e.metaKey || e.shiftKey;
-          if (additive) selectedIdsRef.current.forEach(id => hits.add(id));
+      // 마퀴 종료 시 그리드 콘텐츠 좌표계의 사각형을 산출한 뒤, 화면에 보이는 모든 요일 컬럼을
+      // 순회하며 각 컬럼의 콘텐츠 x-범위와 교차 여부를 판정. 교차하는 컬럼에 속한 블록 중
+      // y-범위가 마퀴와 겹치는 것을 선택. 이렇게 하면 여러 요일에 걸친 드래그가 자연스럽게 동작.
+      const end = toContent(e.clientX, e.clientY);
+      const mX0 = Math.min(marquee.startX, end.x);
+      const mX1 = Math.max(marquee.startX, end.x);
+      const mY0 = Math.min(marquee.startY, end.y);
+      const mY1 = Math.max(marquee.startY, end.y);
+      const grid = timeGridRef.current;
+      if (grid) {
+        const gridRect = grid.getBoundingClientRect();
+        const additive = e.ctrlKey || e.metaKey || e.shiftKey;
+        const hits = new Set<string>();
+        if (additive) selectedIdsRef.current.forEach(id => hits.add(id));
+        const cols = grid.querySelectorAll<HTMLElement>("[data-marquee-column]");
+        cols.forEach(col => {
+          const cRect = col.getBoundingClientRect();
+          const cX0 = cRect.left - gridRect.left;
+          const cX1 = cRect.right - gridRect.left;
+          if (mX1 <= cX0 || mX0 >= cX1) return;
+          const dateStr = col.dataset.date;
+          if (!dateStr) return;
           for (const b of blocksRef.current) {
             if (b.date !== dateStr) continue;
             const bTop = (b.startH * 60 + b.startM) / 60 * HOUR_H;
             const bBot = (b.endH * 60 + b.endM) / 60 * HOUR_H;
-            if (yA < bBot && yB > bTop) hits.add(b.id);
+            if (mY0 < bBot && mY1 > bTop) hits.add(b.id);
           }
-          setSelectedIds(hits);
-        }
+        });
+        setSelectedIds(hits);
       }
       setMarquee(null);
     };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
+    const scrollEl = gridScrollRef.current;
+    scrollEl?.addEventListener("scroll", onScroll);
     return () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      scrollEl?.removeEventListener("scroll", onScroll);
     };
   }, [marquee]);
 
@@ -2146,7 +2172,20 @@ function CalendarSection({
           })}
         </div>
 
-        <div className="flex" style={{ height: TOTAL_H * HOUR_H }}>
+        <div ref={timeGridRef} className="flex relative" style={{ height: TOTAL_H * HOUR_H }}>
+          {/* 마퀴 오버레이 — 그리드 전체 좌표계에서 렌더되어 여러 요일 컬럼을 가로지를 수 있고,
+               세로로도 24시간 그리드 어디에서든 클립 없이 이어짐. z-40 로 스틱키 헤더 위에 뜸. */}
+          {marquee && (
+            <div
+              className="absolute border-2 border-primary/60 bg-primary/10 pointer-events-none z-40"
+              style={{
+                left: Math.min(marquee.startX, marquee.curX),
+                top: Math.min(marquee.startY, marquee.curY),
+                width: Math.abs(marquee.curX - marquee.startX),
+                height: Math.abs(marquee.curY - marquee.startY),
+              }}
+            />
+          )}
           {/* Hour labels — h=0 라벨은 top clamp로 잘리지 않게 */}
           <div className="w-12 flex-shrink-0 relative select-none">
             {Array.from({ length: TOTAL_H }, (_, h) => (
@@ -2179,17 +2218,28 @@ function CalendarSection({
                 // mousemove로 4px 이상 이동하면 마퀴로 승격되고, 그 사이 setMarquee 가 진행 상태를 채움.
                 // 그대로 mouseup 하면 새 블록 생성(기존 클릭 동작 유지). marquee 종료 시엔 새 블록을
                 // 만들지 않도록 mouseup 핸들러 안에서 marquee 여부를 확인.
+                // 마퀴 좌표는 timeGridRef 콘텐츠 좌표계 — 스크롤/열간 자유 이동에 견고.
                 onMouseDown={e => {
                   if (e.button !== 0) return; // 좌클릭만
                   if (resizing || dragBlockId || dragTplId) return;
                   const rect = e.currentTarget.getBoundingClientRect();
+                  const startAbsX = e.clientX;
                   const startAbsY = e.clientY;
                   const startClickTs = Date.now();
                   let becameMarquee = false;
                   const onMove = (mv: MouseEvent) => {
-                    if (Math.abs(mv.clientY - startAbsY) > 4) {
+                    if (Math.abs(mv.clientY - startAbsY) > 4 || Math.abs(mv.clientX - startAbsX) > 4) {
                       becameMarquee = true;
-                      setMarquee({ dayIdx: di, startY: startAbsY, curY: mv.clientY });
+                      const grid = timeGridRef.current;
+                      if (grid) {
+                        const gRect = grid.getBoundingClientRect();
+                        setMarquee({
+                          startX: startAbsX - gRect.left,
+                          startY: startAbsY - gRect.top,
+                          curX: mv.clientX - gRect.left,
+                          curY: mv.clientY - gRect.top,
+                        });
+                      }
                       document.removeEventListener("mousemove", onMove);
                     }
                   };
@@ -2468,21 +2518,8 @@ function CalendarSection({
                   );
                 })}
 
-                {/* 마퀴 선택 사각형 — 이 컬럼에서 시작된 마퀴일 때만 렌더.
-                     document 좌표계의 startY/curY 를 컬럼 rect 기준으로 다시 계산해서 표시. */}
-                {marquee?.dayIdx === di && (() => {
-                  const col = document.querySelector(`[data-marquee-column="${di}"]`);
-                  if (!col) return null;
-                  const rect = col.getBoundingClientRect();
-                  const yA = Math.max(0, Math.min(marquee.startY, marquee.curY) - rect.top);
-                  const yB = Math.max(0, Math.max(marquee.startY, marquee.curY) - rect.top);
-                  return (
-                    <div
-                      className="absolute left-0 right-0 border-2 border-primary/60 bg-primary/10 pointer-events-none z-30"
-                      style={{ top: yA, height: yB - yA }}
-                    />
-                  );
-                })()}
+                {/* 마퀴 선택 사각형은 그리드 레벨(timeGridRef 자식)로 이동됨 —
+                     여러 컬럼을 가로지르고 스크롤/세로 클립 없이 렌더되도록. */}
               </div>
             );
           })}
